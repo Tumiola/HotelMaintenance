@@ -1,8 +1,8 @@
 # MQTT Hotel Demo
 
-This project shows a simple hotel-style MQTT setup with one ESP8266 acting as a room node and one ESP32 acting as a floor controller. It uses the Arduino `PubSubClient` pattern for broker connection, publish, subscribe, and callback handling, and it is designed to be easy to scale later to many rooms on one floor controller.[cite:17][cite:25]
+This project shows a simple hotel-style MQTT setup with one ESP8266 acting as a room node and one ESP32 acting as a floor controller. It uses the Arduino `PubSubClient` pattern for broker connection, publish, subscribe, and callback handling, and it is designed to be easy to scale later to many rooms on one floor controller.:17]:25]
 
-MQTTX is used as the desktop test client. MQTTX can connect to a broker, subscribe to multiple topics, and publish test payloads while the devices are running.[cite:1]
+MQTTX is used as the desktop test client. MQTTX can connect to a broker, subscribe to multiple topics, and publish test payloads while the devices are running.:1]
 
 ## Architecture
 
@@ -10,7 +10,7 @@ The communication path is:
 
 `ESP8266 room node -> MQTT broker -> ESP32 floor controller`
 
-The room node publishes telemetry and answers room-specific requests. The floor controller requests room data and answers room-to-floor requests such as time. This follows a topic design where command and telemetry traffic are separated and the topic path goes from general to specific.[cite:17][cite:6]
+The room node publishes telemetry and answers room-specific requests. The floor controller requests room data and answers room-to-floor requests such as time. This follows a topic design where command and telemetry traffic are separated and the topic path goes from general to specific.
 
 ## Files
 
@@ -29,7 +29,7 @@ const char* MQTT_HOST = "broker.emqx.io";
 const int MQTT_PORT = 1883;
 ```
 
-The Arduino PubSubClient setup uses broker host and port directly through `setServer()` rather than the WebSocket path used by desktop tools.[cite:17]
+The Arduino PubSubClient setup uses broker host and port directly through `setServer()` rather than the WebSocket path used by desktop tools.
 
 ### MQTTX desktop client
 
@@ -43,7 +43,7 @@ Create an MQTTX connection with the following values:
 - Username: leave empty
 - Password: leave empty
 
-That matches the broker profile used in the desktop screenshot for this project. The ESP boards still use port `1883`, while MQTTX can use secure WebSocket for the same broker.[cite:1]
+That matches the broker profile used in the desktop screenshot for this project. The ESP boards still use port `1883`, while MQTTX can use secure WebSocket for the same broker.
 
 ## Required libraries
 
@@ -53,7 +53,7 @@ Install these libraries in Arduino IDE:
 - `ESP8266WiFi` for the ESP8266 sketch
 - `WiFi` for the ESP32 sketch
 
-PubSubClient provides the core MQTT client methods used in this project, including server setup, publish, subscribe, and the callback that handles received messages.[cite:17]
+PubSubClient provides the core MQTT client methods used in this project, including server setup, publish, subscribe, and the callback that handles received messages.:17]
 
 ## Topics
 
@@ -67,7 +67,7 @@ Use these topics exactly for the first test:
 | Floor response | `cmd/hotel/floor1/floor-controller/res` |
 | Room telemetry | `dt/hotel/floor1/room101/status` |
 
-The topic naming keeps telemetry separate from commands and leaves room for later expansion to more rooms and a central controller.[cite:6]
+The topic naming keeps telemetry separate from commands and leaves room for later expansion to more rooms and a central controller.
 
 ## MQTTX subscriptions
 
@@ -79,7 +79,7 @@ After creating the MQTTX connection, subscribe to these topics:
 - `cmd/hotel/floor1/floor-controller/res`
 - `dt/hotel/floor1/room101/status`
 
-MQTTX supports topic subscription and publish testing from the desktop client, which makes it useful for watching both device directions at the same time.[cite:1]
+MQTTX supports topic subscription and publish testing from the desktop client, which makes it useful for watching both device directions at the same time.
 
 ## Test sequence
 
@@ -144,7 +144,7 @@ To create a second room such as `room102`:
 4. Keep the floor controller topics the same.
 5. Either update the floor controller to poll `room102` as well or later switch it to wildcard subscriptions.
 
-A good next step for scaling is to use more general subscriptions on the floor controller, for example with single-level topic wildcards, instead of hardcoding one room topic at a time.[cite:6]
+A good next step for scaling is to use more general subscriptions on the floor controller, for example with single-level topic wildcards, instead of hardcoding one room topic at a time.
 
 ## Notes
 
