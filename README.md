@@ -1,8 +1,8 @@
 # MQTT Hotel Demo
 
-This project shows a simple hotel-style MQTT setup with one ESP8266 acting as a room node and one ESP32 acting as a floor controller. It uses the Arduino `PubSubClient` pattern for broker connection, publish, subscribe, and callback handling, and it is designed to be easy to scale later to many rooms on one floor controller.:17]:25]
+This project shows a simple hotel-style MQTT setup with one ESP8266 acting as a room node and one ESP32 acting as a floor controller. It uses the Arduino `PubSubClient` pattern for broker connection, publish, subscribe, and callback handling, and it is designed to be easy to scale later to many rooms on one floor controller.
 
-MQTTX is used as the desktop test client. MQTTX can connect to a broker, subscribe to multiple topics, and publish test payloads while the devices are running.:1]
+MQTTX is used as the desktop test client. MQTTX can connect to a broker, subscribe to multiple topics, and publish test payloads while the devices are running.
 
 ## Architecture
 
@@ -53,7 +53,7 @@ Install these libraries in Arduino IDE:
 - `ESP8266WiFi` for the ESP8266 sketch
 - `WiFi` for the ESP32 sketch
 
-PubSubClient provides the core MQTT client methods used in this project, including server setup, publish, subscribe, and the callback that handles received messages.:17]
+PubSubClient provides the core MQTT client methods used in this project, including server setup, publish, subscribe, and the callback that handles received messages.
 
 ## Topics
 
