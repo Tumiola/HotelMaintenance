@@ -1,0 +1,37 @@
+mutation CreateSensor (
+  $sensorCollectionId: UUID!
+  $name: String!
+  $type: SensorType!
+  $unit: String!
+  $description: String
+  $serialNumber: String
+  $locationDetails: String
+  $createdAt: Timestamp!
+)  @auth(level: NO_ACCESS) {
+  sensor_insert(data: {
+    sensorCollection: { id: $sensorCollectionId }
+    name: $name
+    type: $type
+    unit: $unit
+    description: $description
+    serialNumber: $serialNumber
+    locationDetails: $locationDetails
+    createdAt: $createdAt
+  })
+}
+
+mutation CreateSensorReading(
+  $sensorId: UUID!
+  $value: Float!
+  $unit: String
+  $description: String
+  $timestamp: Timestamp!
+) @auth(level: NO_ACCESS) {
+  sensorReading_insert(data: {
+    sensor: { id: $sensorId }
+    value: $value
+    unit: $unit
+    description: $description
+    timestamp: $timestamp
+  })
+}

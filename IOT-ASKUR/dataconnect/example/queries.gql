@@ -1,0 +1,8 @@
+query ListSensors @auth(level: NO_ACCESS){
+  sensors {
+    id
+    name
+    type
+    unit
+  }
+}

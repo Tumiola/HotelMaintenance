@@ -1,0 +1,50 @@
+enum SensorType {
+  TEMPERATURE
+  HUMIDITY
+  HEARTRATE
+  BRIGHTNESS
+  ACCELEROMETER
+  MOTION
+  SOUND
+}
+
+type Building @table {
+  name: String!
+  address: String
+  description: String
+  createdAt: Timestamp!
+}
+
+type Room @table {
+  building: Building!
+  name: String!
+  floor: Int
+  description: String
+  createdAt: Timestamp!
+}
+
+type SensorCollection @table {
+  room: Room!
+  name: String!
+  description: String
+  createdAt: Timestamp!
+}
+
+type Sensor @table {
+  sensorCollection: SensorCollection!
+  name: String!
+  type: SensorType!
+  unit: String!
+  description: String
+  serialNumber: String
+  locationDetails: String
+  createdAt: Timestamp!
+}
+
+type SensorReading @table {
+  sensor: Sensor!
+  value: Float!
+  unit: String
+  description: String
+  timestamp: Timestamp!
+}
