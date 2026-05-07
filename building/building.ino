@@ -13,11 +13,11 @@ const int   MQTT_PORT = 1883;
 
 const char* CLIENT_ID = "floor1-esp32";
 
-const char* TOPIC_ROOM_REQ       = "cmd/hotel/floor1/room101/req";
-const char* TOPIC_ROOM_RES       = "cmd/hotel/floor1/room101/res";
-const char* TOPIC_FLOOR_REQ      = "cmd/hotel/floor1/floor-controller/req";
-const char* TOPIC_FLOOR_RES      = "cmd/hotel/floor1/floor-controller/res";
-const char* TOPIC_ROOM_TELEMETRY = "dt/hotel/floor1/room101/status";
+const char* TOPIC_ROOM_REQ       = "cmd/hotel/building1/room101/req";
+const char* TOPIC_ROOM_RES       = "cmd/hotel/building1/room101/res";
+const char* TOPIC_FLOOR_REQ      = "cmd/hotel/building1/floor-controller/req";
+const char* TOPIC_FLOOR_RES      = "cmd/hotel/building1/floor-controller/res";
+const char* TOPIC_ROOM_TELEMETRY = "dt/hotel/building1/room101/status";
 
 WiFiClient wifiClient;
 PubSubClient client(wifiClient);

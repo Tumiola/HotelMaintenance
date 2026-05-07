@@ -1,0 +1,22 @@
+# Arduino IDE build output and compiled files
+build/
+*.bcf
+*.bin
+*.eep
+*.elf
+*.hex
+*.map
+*.o
+*.uf2
+
+# Dependency directories
+libraries/
+
+# macOS directory files
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+
+# Visual Studio Code workspace files
+.vscode/arduino.json

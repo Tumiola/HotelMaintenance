@@ -1,5 +1,5 @@
-// ESP32 FLOOR CONTROLLER
-// Board: ESP32
+// ESP32 ROOM NODE
+// Board: ESP32 / NodeMCU
 // Libraries: PubSubClient
 
 #include <WiFi.h>
@@ -7,22 +7,30 @@
 
 const char* WIFI_SSID = "tumi";
 const char* WIFI_PASS = "tumiolason";
-
 const char* MQTT_HOST = "broker.emqx.io";
 const int   MQTT_PORT = 1883;
 
-const char* CLIENT_ID = "floor1-esp32";
+const char* CLIENT_ID = "room101-esp32";
 
-const char* TOPIC_ROOM_REQ       = "cmd/hotel/floor1/room101/req";
-const char* TOPIC_ROOM_RES       = "cmd/hotel/floor1/room101/res";
-const char* TOPIC_FLOOR_REQ      = "cmd/hotel/floor1/floor-controller/req";
-const char* TOPIC_FLOOR_RES      = "cmd/hotel/floor1/floor-controller/res";
-const char* TOPIC_ROOM_TELEMETRY = "dt/hotel/floor1/room101/status";
+const char* TOPIC_ROOM_REQ   = "cmd/hotel/building1/room101/req";
+const char* TOPIC_ROOM_RES   = "cmd/hotel/building1/room101/res";
+const char* TOPIC_FLOOR_REQ  = "cmd/hotel/building1/floor-controller/req";
+const char* TOPIC_FLOOR_RES  = "cmd/hotel/building1/floor-controller/res";
+const char* TOPIC_TELEMETRY  = "dt/hotel/building1/room101/status";
 
 WiFiClient wifiClient;
 PubSubClient client(wifiClient);
 
-unsigned long lastRoomPollMs = 0;
+unsigned long lastTelemetryMs = 0;
+unsigned long lastTimeRequestMs = 0;
+
+float fakeTemperature() {
+  return 22.0 + (millis() % 1000) / 100.0;   // 22.0 to 31.9
+}
+
+float fakeHumidity() {
+  return 40.0 + (millis() % 500) / 10.0;     // 40.0 to 89.9
+}
 
 String extractValue(const String& json, const String& key) {
   String pattern = "\"" + key + "\":\"";
@@ -34,30 +42,34 @@ String extractValue(const String& json, const String& key) {
   return json.substring(start, end);
 }
 
-void requestRoomStatus() {
+void publishRoomStatus(const String& requestId = "") {
+  float t = fakeTemperature();
+  float h = fakeHumidity();
+
   String payload = "{";
-  payload += "\"request_id\":\"roomreq-" + String(millis()) + "\",";
-  payload += "\"action\":\"get_status\"";
+  if (requestId.length() > 0) {
+    payload += "\"request_id\":\"" + requestId + "\",";
+  }
+  payload += "\"room\":\"room101\",";
+  payload += "\"temperature\":" + String(t, 1) + ",";
+  payload += "\"humidity\":" + String(h, 1) + ",";
+  payload += "\"motion\":false,";
+  payload += "\"window_open\":false";
   payload += "}";
 
-  client.publish(TOPIC_ROOM_REQ, payload.c_str());
-  Serial.println("Requested room status");
+  client.publish(TOPIC_ROOM_RES, payload.c_str());
+  client.publish(TOPIC_TELEMETRY, payload.c_str());
 }
 
-void replyWithTime(const String& requestId, const String& room) {
-  // Replace this with NTP or RTC later
-  String fakeTime = "2026-04-14T13:52:00";
-
+void requestTimeFromFloor() {
   String payload = "{";
-  payload += "\"request_id\":\"" + requestId + "\",";
-  payload += "\"ok\":true,";
-  payload += "\"time\":\"" + fakeTime + "\",";
-  payload += "\"floor\":\"floor1\",";
-  payload += "\"target_room\":\"" + room + "\"";
+  payload += "\"request_id\":\"time-" + String(millis()) + "\",";
+  payload += "\"action\":\"get_time\",";
+  payload += "\"from\":\"room101\"";
   payload += "}";
 
-  client.publish(TOPIC_FLOOR_RES, payload.c_str());
-  Serial.println("Sent time response to room");
+  client.publish(TOPIC_FLOOR_REQ, payload.c_str());
+  Serial.println("Requested time from floor controller");
 }
 
 void callback(char* topic, byte* payload, unsigned int length) {
@@ -72,18 +84,17 @@ void callback(char* topic, byte* payload, unsigned int length) {
   Serial.print(": ");
   Serial.println(msg);
 
-  if (topicStr == TOPIC_ROOM_RES || topicStr == TOPIC_ROOM_TELEMETRY) {
-    Serial.println("Room data received by floor controller");
-    // Later: forward this to your central ESP32 here
-  }
-  else if (topicStr == TOPIC_FLOOR_REQ) {
+  if (topicStr == TOPIC_ROOM_REQ) {
     String action = extractValue(msg, "action");
     String requestId = extractValue(msg, "request_id");
-    String fromRoom = extractValue(msg, "from");
 
-    if (action == "get_time") {
-      replyWithTime(requestId, fromRoom);
+    if (action == "get_status") {
+      publishRoomStatus(requestId);
     }
+  }
+  else if (topicStr == TOPIC_FLOOR_RES) {
+    Serial.println("Floor response received:");
+    Serial.println(msg);
   }
 }
 
@@ -108,11 +119,10 @@ void connectMQTT() {
     if (client.connect(CLIENT_ID)) {
       Serial.println("connected");
 
-      client.subscribe(TOPIC_ROOM_RES);
-      client.subscribe(TOPIC_ROOM_TELEMETRY);
-      client.subscribe(TOPIC_FLOOR_REQ);
+      client.subscribe(TOPIC_ROOM_REQ);
+      client.subscribe(TOPIC_FLOOR_RES);
 
-      Serial.println("Subscribed to room/floor topics");
+      Serial.println("Subscribed to room req and floor res topics");
     } else {
       Serial.print("failed, rc=");
       Serial.print(client.state());
@@ -143,8 +153,14 @@ void loop() {
   client.loop();
 
   unsigned long now = millis();
-  if (now - lastRoomPollMs > 15000) {
-    lastRoomPollMs = now;
-    requestRoomStatus();
+
+  if (now - lastTelemetryMs > 10000) {
+    lastTelemetryMs = now;
+    publishRoomStatus();
+  }
+
+  if (now - lastTimeRequestMs > 30000) {
+    lastTimeRequestMs = now;
+    requestTimeFromFloor();
   }
 }
