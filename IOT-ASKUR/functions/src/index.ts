@@ -10,13 +10,81 @@
 import {setGlobalOptions} from "firebase-functions";
 import {onRequest} from "firebase-functions/v2/https";
 import * as logger from "firebase-functions/logger";
+import {defineSecret} from "firebase-functions/params";
+
+const ROOM_SECRET = defineSecret("ROOM_SECRET");
 
 interface SensorReadingBody {
   sensorId: string;
-  value: number;
-  unit?: string;
-  description?: string;
+  value: string;
 }
+
+enum SensorType {
+  TEMPERATURE = 0x01,
+  HUMIDITY = 0x02,
+  HEARTRATE = 0x03,
+}
+
+const sensorTypeToString = (sensorType: SensorType) => {
+  if(sensorType == SensorType.TEMPERATURE) return "TEMPERATURE"
+  if(sensorType == SensorType.HUMIDITY) return "HUMIDITY"
+  if(sensorType == SensorType.HEARTRATE) return "HEARTRATE"
+  return "UNKNOWN"
+}
+
+
+// ByteArray structure: [deviceId][sequence][sensorEntryCount][sensorEntry]
+const hexStrToByteArr = (hexStr: String) => {
+ return Uint8Array.from(
+  hexStr.match(/.{1,2}/g)!.map(byte => parseInt(byte, 16))
+);
+}
+
+const decodePayload = (byteArrayHexString: String) => {
+  const byteArray = hexStrToByteArr(byteArrayHexString)
+  let sensorEntryArr: SensorReadingBody[] = []
+  let byteCounter = 0
+  let currentSensorReading: SensorReadingBody = {
+    sensorId: "",
+    value: "",
+  }
+
+  byteArray.subarray(3).forEach((byte, index) => {
+    if(byteCounter == 0) {
+      currentSensorReading.sensorId = String(byte)
+    }
+    const isTemp = currentSensorReading.sensorId == "1"
+    
+    if(byteCounter == 1) {
+      if(isTemp) currentSensorReading.value += String(byte)
+    }
+    if(byteCounter == 2) {
+      if(isTemp) currentSensorReading.value += String(byte)
+    }
+    if(byteCounter == 3) {
+      let sensorValueAsString = String(parseInt(currentSensorReading.value, 16))
+      const formatted = sensorValueAsString.slice(0, 2) + "." + sensorValueAsString.slice(2)
+      currentSensorReading.value = formatted
+    }
+      
+    byteCounter++
+    if(byteCounter == 4) {
+      sensorEntryArr.push(currentSensorReading)
+      byteCounter = 0
+    }
+  })
+  return {
+    deviceId: byteArray[0],
+    sequence: byteArray[1],
+    sensorEntryCount: byteArray[2], 
+    sensorEntries: sensorEntryArr
+  }
+}
+
+const test = decodePayload("0101020102092901020947")
+
+
+
 
 const {createSensorReading} = require("../src/dataconnect-admin-generated/index.cjs.js") as {
   createSensorReading: (args: {
@@ -30,8 +98,16 @@ const {createSensorReading} = require("../src/dataconnect-admin-generated/index.
 
 setGlobalOptions({ maxInstances: 10 });
 
-export const writeSensorReading = onRequest(async (req, res) => {
+export const writeSensorReading = onRequest({secrets: [ROOM_SECRET]}, async (req, res) => {
   try {
+    const auth = req.headers.authorization ?? "";
+    const token = auth.replace(/^Bearer\s+/i, "");
+
+    if (token != ROOM_SECRET.value()) {
+      res.status(401).send("Unauthorized");
+      return;
+    }
+
     if (req.method !== "POST") {
       res.status(405).send("Method not allowed");
       return;
@@ -70,8 +146,16 @@ export const writeSensorReading = onRequest(async (req, res) => {
   }
 });
 
-export const helloWorld = onRequest((req, res) => {
-  logger.info("Hello from ESP32 👋");
+export const helloWorld = onRequest({secrets: [ROOM_SECRET]},(req, res) => {
+  const auth = req.headers.authorization ?? "";
+  const token = auth.replace(/^Bearer\s+/i, "");
 
+  if (token != ROOM_SECRET.value()) {
+    res.status(401).send("Unauthorized");
+    return;
+  }
+
+  logger.info("Hello from ESP32 👋");
   res.status(200).send("Hello ESP32");
 });
+
