@@ -13,8 +13,8 @@
 #include "esp_bt.h"
 
 // WiFi
-#define WIFI_SSID "Emre iPhone’u"
-#define WIFI_PASS "emre1234"
+#define WIFI_SSID ""
+#define WIFI_PASS ""
 
 // Blynk virtual pins
 #define VP_TEMP     V0
@@ -41,6 +41,17 @@
 #define SIM_START_HOUR        6
 #define SIM_HOUR_DURATION_MS  30000
 
+// LoRa config
+#define DEVICE_ID         5
+#define BASE_INTERVAL_MS  10000
+#define JITTER_MS         8000
+#define LORA_RST          23
+#define LORA_TX           18
+#define LORA_RX           19
+
+#include <HardwareSerial.h>
+HardwareSerial loraSerial(1);
+
 // BLE state room node
 bool roomNodeConnected  = false;
 bool roomNodeDoConnect  = false;
@@ -65,6 +76,42 @@ String lastAppliedMode  = "";
 
 // FreeRTOS task handle
 TaskHandle_t bleTaskHandle = NULL;
+TaskHandle_t loraTaskHandle = NULL;
+
+// Latest sensor data for LoRa
+volatile int   latestMotion   = 0;
+volatile int   latestSound    = 0;
+volatile float latestTemp     = 0.0;
+volatile float latestHumidity = 0.0;
+volatile bool  newDataForLora = false;
+
+// LoRa helpers
+String str;
+
+void led_on()  { digitalWrite(13, 1); }
+void led_off() { digitalWrite(13, 0); }
+
+void lora_autobaud() {
+  String response = "";
+  while (response == "") {
+    delay(1000);
+    loraSerial.write((uint8_t)0x00);
+    loraSerial.write((uint8_t)0x55);
+    loraSerial.println();
+    loraSerial.println("sys get ver");
+    response = loraSerial.readStringUntil('\n');
+  }
+}
+
+String buildPayload(int motion, int sound, float temp, float humidity) {
+  uint8_t tByte = (uint8_t)constrain((int)(temp * 10), 0, 255);
+  uint8_t hByte = (uint8_t)constrain((int)humidity, 0, 255);
+  uint8_t mByte = (uint8_t)constrain(motion, 0, 255);
+  uint8_t sByte = (uint8_t)constrain(sound, 0, 255);
+  char buf[13];
+  sprintf(buf, "%02X01%02X%02X%02X%02X", DEVICE_ID, mByte, sByte, tByte, hByte);
+  return String(buf);
+}
 
 int getCurrentHour() {
   int simHour = SIM_START_HOUR + (millis() / SIM_HOUR_DURATION_MS);
@@ -122,7 +169,6 @@ void applyNightMode() {
 void routeToBlynk(String payload) {
   Serial.println("BLE IN " + payload);
 
-  // Parse N1,REPORT,motionCount,soundCount,temp,humidity
   if (payload.startsWith("N1,REPORT,")) {
     String data = payload.substring(10);
     int c1 = data.indexOf(',');
@@ -142,6 +188,13 @@ void routeToBlynk(String payload) {
 
       Serial.printf("Motion: %d Sound: %d Temp: %.1f Hum: %.1f\n",
                     motion, sound, temp, humidity);
+
+      // Store for LoRa
+      latestMotion   = motion;
+      latestSound    = sound;
+      latestTemp     = temp;
+      latestHumidity = humidity;
+      newDataForLora = true;
     }
   }
 }
@@ -275,6 +328,118 @@ BLYNK_WRITE(VP_CURTAIN) {
   lastAppliedMode = "MANUAL";
 }
 
+// LoRa task runs on core 1
+void loraTask(void* parameter) {
+  pinMode(13, OUTPUT);
+  led_off();
+  pinMode(LORA_RST, OUTPUT);
+  digitalWrite(LORA_RST, HIGH);
+
+  loraSerial.begin(9600, SERIAL_8N1, LORA_RX, LORA_TX);
+  loraSerial.setTimeout(60000);
+
+  digitalWrite(LORA_RST, LOW);
+  delay(200);
+  digitalWrite(LORA_RST, HIGH);
+  delay(200);
+
+  lora_autobaud();
+
+  led_on();
+  delay(1000);
+  led_off();
+
+  Serial.println("Initing LoRa");
+
+  loraSerial.read();
+  str = loraSerial.readStringUntil('\n');
+  Serial.println(str);
+
+  loraSerial.println("sys get ver");
+  str = loraSerial.readStringUntil('\n');
+  Serial.println(str);
+
+  loraSerial.println("mac pause");
+  str = loraSerial.readStringUntil('\n');
+  Serial.println(str);
+
+  loraSerial.println("radio set mod lora");
+  str = loraSerial.readStringUntil('\n');
+  Serial.println(str);
+
+  loraSerial.println("radio set freq 869100000");
+  str = loraSerial.readStringUntil('\n');
+  Serial.println(str);
+
+  loraSerial.println("radio set pwr 14");
+  str = loraSerial.readStringUntil('\n');
+  Serial.println(str);
+
+  loraSerial.println("radio set sf sf7");
+  str = loraSerial.readStringUntil('\n');
+  Serial.println(str);
+
+  loraSerial.println("radio set afcbw 41.7");
+  str = loraSerial.readStringUntil('\n');
+  Serial.println(str);
+
+  loraSerial.println("radio set rxbw 125");
+  str = loraSerial.readStringUntil('\n');
+  Serial.println(str);
+
+  loraSerial.println("radio set prlen 8");
+  str = loraSerial.readStringUntil('\n');
+  Serial.println(str);
+
+  loraSerial.println("radio set crc on");
+  str = loraSerial.readStringUntil('\n');
+  Serial.println(str);
+
+  loraSerial.println("radio set iqi off");
+  str = loraSerial.readStringUntil('\n');
+  Serial.println(str);
+
+  loraSerial.println("radio set cr 4/5");
+  str = loraSerial.readStringUntil('\n');
+  Serial.println(str);
+
+  loraSerial.println("radio set wdt 60000");
+  str = loraSerial.readStringUntil('\n');
+  Serial.println(str);
+
+  loraSerial.println("radio set sync 12");
+  str = loraSerial.readStringUntil('\n');
+  Serial.println(str);
+
+  loraSerial.println("radio set bw 125");
+  str = loraSerial.readStringUntil('\n');
+  Serial.println(str);
+
+  randomSeed(esp_random());
+  Serial.println("LoRa ready");
+
+  while (true) {
+    if (newDataForLora) {
+      led_on();
+      String payload = buildPayload(latestMotion, latestSound, latestTemp, latestHumidity);
+      Serial.printf("[LORA TX] Device:%02d Payload:%s\n", DEVICE_ID, payload.c_str());
+      loraSerial.println("radio tx " + payload);
+      str = loraSerial.readStringUntil('\n');
+      Serial.println(str);
+      str = loraSerial.readStringUntil('\n');
+      Serial.println(str);
+      led_off();
+      newDataForLora = false;
+
+      uint32_t waitMs = BASE_INTERVAL_MS + random(0, JITTER_MS);
+      Serial.printf("Next LoRa TX in %lums\n", waitMs);
+      vTaskDelay(waitMs / portTICK_PERIOD_MS);
+    }
+    vTaskDelay(100 / portTICK_PERIOD_MS);
+  }
+}
+
+// BLE task runs on core 0
 void bleTask(void* parameter) {
   esp_bt_controller_mem_release(ESP_BT_MODE_CLASSIC_BT);
   BLEDevice::init("RoomHub");
@@ -299,7 +464,6 @@ void bleTask(void* parameter) {
       curtainDoConnect = false;
     }
 
-    // Room node disconnects every sleep cycle so reset state when it drops
     if (pRoomClient != nullptr && !pRoomClient->isConnected() && roomNodeConnected) {
       Serial.println("Room node disconnected resetting for next wake cycle");
       roomNodeConnected = false;
@@ -317,13 +481,11 @@ void bleTask(void* parameter) {
 
     if (curtainConnected) {
       int hour = getCurrentHour();
-
       static int lastLoggedHour = -1;
       if (hour != lastLoggedHour) {
         Serial.printf("Simulated hour %d\n", hour);
         lastLoggedHour = hour;
       }
-
       if (hour == MORNING_HOUR && lastAppliedMode != "MORNING") {
         applyMorningMode();
       } else if (hour == NIGHT_HOUR && lastAppliedMode != "NIGHT") {
@@ -344,6 +506,7 @@ void setup() {
   Blynk.begin(BLYNK_AUTH_TOKEN, WIFI_SSID, WIFI_PASS);
   Serial.println("Blynk connected");
 
+  // BLE task on core 0
   xTaskCreatePinnedToCore(
     bleTask,
     "BLE Task",
@@ -352,6 +515,17 @@ void setup() {
     1,
     &bleTaskHandle,
     0
+  );
+
+  // LoRa task on core 1
+  xTaskCreatePinnedToCore(
+    loraTask,
+    "LoRa Task",
+    8000,
+    NULL,
+    1,
+    &loraTaskHandle,
+    1
   );
 }
 
