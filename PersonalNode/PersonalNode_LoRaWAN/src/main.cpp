@@ -24,8 +24,8 @@ const uint8_t MAX_RETRIES = 5;           // Maximum number of retries for sendin
 const uint16_t RETRY_INTERVAL_MS = 2000; // Time in milliseconds between retries
 
 //Pin definitions
-const uint8_t RXD2_LORA = 4;    // LoRa RX pin, 16 on ESP32-doit, 4 on ESP32-C3
-const uint8_t TXD2_LORA = 2;    // LoRa TX pin, 17 on ESP32-doit, 5 on ESP32-C3
+const uint8_t RXD2_LORA = 4;    // LoRa RX pin, 4 on ESP32-doit, 4 on ESP32-C3 -- moved from general UART2 PINs, to try to solve sleeping issue
+const uint8_t TXD2_LORA = 2;    // LoRa TX pin, 2 on ESP32-doit, 5 on ESP32-C3
 const uint8_t RST_LORA = 5;      // LoRa reset pin, 5 on ESP32-doit, 3 on ESP32-C3
 //const uint8_t SDA_HR = 8;        // Heart rate sensor SDA pin
 //const uint8_t SCL_HR = 9;        // Heart rate sensor SCL pin
@@ -38,7 +38,7 @@ const char* APP_KEY   = "9142F57ED60231FE70C7B49FB3E166B7";  // 16‑byte hex Ap
 
 //LoRa settings
 #define BAUD_RATE 57600    // LoRa baud rate
-#define SERIAL_TIME_OUT 15000        // LoRa serial timeout in milliseconds
+#define LORA_TIME_OUT 15000        // LoRa serial timeout in milliseconds
 #define TIME_OUT 15000               // General timeout for LoRa commands in milliseconds
 
 //Heart rate acquisition settings
@@ -82,20 +82,18 @@ void setup(){
     Serial.begin(BAUD_RATE);
   }
   esp_sleep_wakeup_cause_t wakeupReason = esp_sleep_get_wakeup_cause();
-  if(wakeupReason == ESP_SLEEP_WAKEUP_TIMER) {
+  if(wakeupReason == ESP_SLEEP_WAKEUP_TIMER) {      // Enters if woken up from deepsleep due to normal operation
     if(IS_DEBUG) {
       Serial.println("Serial communication initialized.");
       Serial.println("Woke up from timer. Current mode: " + String(currentMode));
       Serial.flush();   // ← same fix on the wake side, before any heavy operations
     }
-
     //This is indeed not great, it should not need to be initiated again. However after extensive debugging, the module cannot reconnect consistently after ESP deep-sleep. Further discussed in the report
     LoRa_initiate(false);
     // Sad sad
-
     delay(100);
     //wakeRN2483(); Would need if it were to correctly exit the deep sleep. However as noted above complete reinitation is necesarry
-  } else if (wakeupReason == ESP_SLEEP_WAKEUP_EXT0) {
+  } else if (wakeupReason == ESP_SLEEP_WAKEUP_EXT0) {   // Enters if woken up from deepsleep due to DISTRESS interupt
     if(IS_DEBUG) {
       Serial.println("Serial communication initialized.");
       Serial.println("Woke up from external interrupt. DISTRESS event triggered.");
@@ -103,18 +101,19 @@ void setup(){
     }
     loraSerial.begin(BAUD_RATE, SERIAL_8N1, RXD2_LORA, TXD2_LORA);
     delay(100);
-    wakeRN2483(); // Ensure LoRa module is awake before sending distress signal
+    LoRa_initiate(false);       // Must reinitate the module after deepsleep. Discussed above
+    //wakeRN2483(); // Ensure LoRa module is awake before sending distress signal
     LoRaWANDistress(); // Send distress signal on wakeup from external interrupt
   }
-  else {
+  else {                                              //Normal operation
     if(IS_DEBUG) {
       while(Serial.available() == 0) {
-        // Wait for serial connection
+        // Wait for serial connection, operator must press a button
       }
       Serial.println("Serial communication initialised.");
       Serial.println("Woke up from other reason: " + String(wakeupReason));
     }
-    LoRa_initiate();
+    LoRa_initiate(true);
     configureInterruptPin();
   }
 
@@ -131,8 +130,8 @@ void loop(){
   switch (currentMode)
   {
   case INITIATE:
-    // Initialization code
-    LoRa_WANTransmission("Device initiated");
+    // Initial state, parking in lightsleep while operator configures device
+    LoRa_WANTransmission("INITIATED");
     if(currentMode == INITIATE) {
       if(IS_DEBUG) {
         Serial.println("No mode change received after initiation. Entering light sleep to save power until next transmission opportunity.");
@@ -143,7 +142,7 @@ void loop(){
 
   case HR_LOWFREQ:
     // Heart rate acquisition at low frequency
-    HR_readSensor();
+    HR_readSensor();                    // The Function itself sends the recorded values
     enterSleep(HR_LOWFREQ_SLEEP, true); // Enter deep sleep for low frequency mode
   break;
 
@@ -155,7 +154,7 @@ void loop(){
   }
 }
 
-String toHex(const String& s) {
+String toHex(const String& s) {         // To convert strigns to HEX format for transmission
   String hex = "";
   for (size_t i = 0; i < s.length(); i++) {
     char buf[3];
@@ -165,7 +164,7 @@ String toHex(const String& s) {
   return hex;
 }
 
-String fromHex(const String& hex) {
+String fromHex(const String& hex) {     // To convert HEX transmissions to readable string values. Not relevant in this applicaiton
   String result = "";
   for (size_t i = 0; i + 1 < hex.length(); i += 2) {
     char buf[3] = { hex[i], hex[i+1], '\0' };
@@ -174,13 +173,13 @@ String fromHex(const String& hex) {
   return result;
 }
 
-void LoRa_flushInput() {
+void LoRa_flushInput() {              // Wait for LoRa serial to finish any processes, avoid collissions
   while (loraSerial.available()) {
     loraSerial.read();
   }
 }
 
-String LoRa_cmd(String s) {
+String LoRa_cmd(String s) {           // Raw serial command function, to format command and answer appropiatly
   LoRa_flushInput();
   loraSerial.println(s);
   String response = loraSerial.readStringUntil('\n');
@@ -195,11 +194,12 @@ String LoRa_cmd(String s) {
   return response;
 }
 
-bool LoRa_initiate(bool first = true) {
+bool LoRa_initiate(bool first = true) {   // Use this funciton to initate the LoRa module. bool first has been introduced, so initiation after deep sleep does not run MAC configuration again
   // Initialize LoRa serial communication
   loraSerial.begin(BAUD_RATE, SERIAL_8N1, RXD2_LORA, TXD2_LORA);
-  loraSerial.setTimeout(SERIAL_TIME_OUT);
+  loraSerial.setTimeout(LORA_TIME_OUT);
 
+  // Cycle RST pin to get LoRa module to known state.
   pinMode(RST_LORA, OUTPUT);
   digitalWrite(RST_LORA, LOW);
   delay(100);
@@ -213,7 +213,7 @@ bool LoRa_initiate(bool first = true) {
   }
   String cmd = "";
   if(first){
-    // Start the LoRaWAN stack and join the network
+    // Start the LoRaWAN stack and join the network, only enter if its first configuration
     cmd = "mac reset 868";
     response = LoRa_cmd(cmd); 
     if(response != "ok") {
@@ -492,7 +492,7 @@ void wakeRN2483() {
 
     // 3. Re-enable UART
     loraSerial.begin(BAUD_RATE, SERIAL_8N1, RXD2_LORA, TXD2_LORA);
-    loraSerial.setTimeout(SERIAL_TIME_OUT);
+    loraSerial.setTimeout(LORA_TIME_OUT);
     delay(200);
 
     // 4. Send auto-baud sync
@@ -529,7 +529,7 @@ void wakeRN2483() {
   if (IS_DEBUG) {
     Serial.println("[LoRa] All wake attempts failed. Reinitate the module");
   }
-  LoRa_initiate();
+  LoRa_initiate(true);
   return;
 }
 
