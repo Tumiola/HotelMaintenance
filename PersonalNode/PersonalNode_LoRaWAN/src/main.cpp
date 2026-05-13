@@ -5,6 +5,7 @@
 #include "heartRate.h"
 #include "esp_sleep.h"
 #include <driver/rtc_io.h>
+#include "spo2_algorithm.h"
 
 #define IS_DEBUG true
 
@@ -24,11 +25,11 @@ const uint8_t MAX_RETRIES = 5;           // Maximum number of retries for sendin
 const uint16_t RETRY_INTERVAL_MS = 2000; // Time in milliseconds between retries
 
 //Pin definitions
-const uint8_t RXD2_LORA = 4;    // LoRa RX pin, 4 on ESP32-doit, 4 on ESP32-C3 -- moved from general UART2 PINs, to try to solve sleeping issue
-const uint8_t TXD2_LORA = 2;    // LoRa TX pin, 2 on ESP32-doit, 5 on ESP32-C3
+const uint8_t RXD2_LORA = 16;    // LoRa RX pin, 4 on ESP32-doit, 4 on ESP32-C3 -- moved from general UART2 PINs, to try to solve sleeping issue
+const uint8_t TXD2_LORA = 17;    // LoRa TX pin, 2 on ESP32-doit, 5 on ESP32-C3
 const uint8_t RST_LORA = 5;      // LoRa reset pin, 5 on ESP32-doit, 3 on ESP32-C3
-//const uint8_t SDA_HR = 8;        // Heart rate sensor SDA pin
-//const uint8_t SCL_HR = 9;        // Heart rate sensor SCL pin
+const uint8_t SDA_HR = 21;        // Heart rate sensor SDA pin
+const uint8_t SCL_HR = 22;        // Heart rate sensor SCL pin
 const uint8_t GPIO_INTERRUPT = 15; // GPIO pin for wakeup interrupt (e.g., distress signal)
 
 //LoRaWAN credentials
@@ -44,11 +45,19 @@ const char* APP_KEY   = "9142F57ED60231FE70C7B49FB3E166B7";  // 16‑byte hex Ap
 //Heart rate acquisition settings
 const uint32_t ACQUISITION_DURATION = 20000; // Heart rate acqusition window. Time limited by int size
 
+// HR data buffer
+long lastBeat = 0; //Time at which the last beat occurred
+float beatsPerMinute;
+int beatAvg;
+long acqusitionStartTime = 0;
+long currentTime = 0;
+
 //Module instances
 HardwareSerial loraSerial(1); // LoRa serial instance
-//MAX30105 particleSensor; // Heart rate sensor instance
+MAX30105 particleSensor; // Heart rate sensor instance
 
 RTC_DATA_ATTR DeviceMode currentMode = INITIATE;
+volatile bool distressTriggered = false;
 
 String toHex(const String& s);
 
@@ -76,15 +85,32 @@ void wakeRN2483();
 
 void configureInterruptPin();
 
+void IRAM_ATTR distressISR();
+
+void configureOperationInterupt();
+
+bool takeDistressFlag();
+
 void setup(){
   //Initialise serial communication
   if(IS_DEBUG) {
     Serial.begin(BAUD_RATE);
+    Serial.println("Serial monitor started!");
   }
   esp_sleep_wakeup_cause_t wakeupReason = esp_sleep_get_wakeup_cause();
-  if(wakeupReason == ESP_SLEEP_WAKEUP_TIMER) {      // Enters if woken up from deepsleep due to normal operation
+  if (wakeupReason == ESP_SLEEP_WAKEUP_EXT0) {   // Enters if woken up from deepsleep due to DISTRESS interupt
     if(IS_DEBUG) {
-      Serial.println("Serial communication initialized.");
+      Serial.println("Woke up from external interrupt. DISTRESS event triggered.");
+      Serial.flush();   // ← same fix on the wake side, before any heavy operations
+    }
+    delay(100);
+    LoRa_initiate(false);       // Must reinitate the module after deepsleep. Discussed above
+    LoRaWANDistress(); // Send distress signal on wakeup from external interrupt
+    configureOperationInterupt();
+  } else 
+  if(wakeupReason == ESP_SLEEP_WAKEUP_TIMER) {      // Enters if woken up from deepsleep due to normal operation
+    configureOperationInterupt();
+    if(IS_DEBUG) {
       Serial.println("Woke up from timer. Current mode: " + String(currentMode));
       Serial.flush();   // ← same fix on the wake side, before any heavy operations
     }
@@ -93,19 +119,9 @@ void setup(){
     // Sad sad
     delay(100);
     //wakeRN2483(); Would need if it were to correctly exit the deep sleep. However as noted above complete reinitation is necesarry
-  } else if (wakeupReason == ESP_SLEEP_WAKEUP_EXT0) {   // Enters if woken up from deepsleep due to DISTRESS interupt
-    if(IS_DEBUG) {
-      Serial.println("Serial communication initialized.");
-      Serial.println("Woke up from external interrupt. DISTRESS event triggered.");
-      Serial.flush();   // ← same fix on the wake side, before any heavy operations
-    }
-    loraSerial.begin(BAUD_RATE, SERIAL_8N1, RXD2_LORA, TXD2_LORA);
-    delay(100);
-    LoRa_initiate(false);       // Must reinitate the module after deepsleep. Discussed above
-    //wakeRN2483(); // Ensure LoRa module is awake before sending distress signal
-    LoRaWANDistress(); // Send distress signal on wakeup from external interrupt
   }
-  else {                                              //Normal operation
+  else {
+    configureOperationInterupt();
     if(IS_DEBUG) {
       while(Serial.available() == 0) {
         // Wait for serial connection, operator must press a button
@@ -113,16 +129,21 @@ void setup(){
       Serial.println("Serial communication initialised.");
       Serial.println("Woke up from other reason: " + String(wakeupReason));
     }
-    LoRa_initiate(true);
-    configureInterruptPin();
+    if(!LoRa_initiate(true)) {
+      if(IS_DEBUG) {
+        Serial.println("Failed to initialise heart rate sensor. Check wiring.");
+      }
+    }
+    
   }
-
-  //Initialise heart rate sensor
   if(!HR_initiate()) {
     if(IS_DEBUG) {
       Serial.println("Failed to initialise heart rate sensor. Check wiring.");
     }
-    while(1);
+  } 
+  
+  if(takeDistressFlag()){
+    LoRaWANDistress();
   }
 }
 
@@ -132,25 +153,42 @@ void loop(){
   case INITIATE:
     // Initial state, parking in lightsleep while operator configures device
     LoRa_WANTransmission("INITIATED");
-    if(currentMode == INITIATE) {
-      if(IS_DEBUG) {
-        Serial.println("No mode change received after initiation. Entering light sleep to save power until next transmission opportunity.");
-      }
-      enterSleep(LIGHT_SLEEP, false); // Enter light sleep after initialization to save power until next transmission opportunity
+    if(takeDistressFlag()){
+      LoRaWANDistress();
     }
   break;
 
   case HR_LOWFREQ:
     // Heart rate acquisition at low frequency
     HR_readSensor();                    // The Function itself sends the recorded values
-    enterSleep(HR_LOWFREQ_SLEEP, true); // Enter deep sleep for low frequency mode
+    if(takeDistressFlag()){
+      LoRaWANDistress();
+    }
   break;
 
   case HR_HIGHFREQ:
     // Heart rate acquisition at high frequency
     HR_readSensor();
-    enterSleep(HR_HIGHFREQ_SLEEP, true); // Enter deep sleep for high frequency mode
+    if(takeDistressFlag()){
+      LoRaWANDistress();
+    }
   break;
+  }
+  switch(currentMode){
+    case INITIATE:
+      if(IS_DEBUG) {
+        Serial.println("No mode change received after initiation. Entering light sleep to save power until next transmission opportunity.");
+        }
+      enterSleep(LIGHT_SLEEP, false); // Enter light sleep after initialization to save power until next transmission opportunity
+      break;
+    
+    case HR_LOWFREQ:
+      enterSleep(HR_LOWFREQ_SLEEP, true); // Enter deep sleep for low frequency mode
+      break;
+    
+    case HR_HIGHFREQ:
+      enterSleep(HR_HIGHFREQ_SLEEP, true); // Enter deep sleep for high frequency mode
+        break;
   }
 }
 
@@ -295,7 +333,6 @@ bool LoRa_initiate(bool first = true) {   // Use this funciton to initate the Lo
     if(IS_DEBUG) {
       Serial.println("Successfully joined LoRaWAN network.");
     }
-    return true;
   }
 
   cmd = "mac set class a";
@@ -320,9 +357,7 @@ bool LoRa_WANTransmission(String payload) {
   if(response != "ok") {
     if(IS_DEBUG) {
       Serial.println("Failed to send payload. Response: " + response);
-      Serial.println("Entering light sleep to save power until next transmission opportunity.");
     }
-    enterSleep(LIGHT_SLEEP, false); // Enter light sleep on transmission failure to save power
     return false; // Return on failure to avoid changing state
   }
   // Wait for transmission result
@@ -364,7 +399,6 @@ bool LoRa_WANTransmission(String payload) {
     }
     return true;
   }
-  Serial.flush(); // Ensure all debug output is sent before sleeping
   if(IS_DEBUG) {
     Serial.println("Unknown mode received: " + response);
     Serial.flush();
@@ -376,54 +410,88 @@ bool LoRa_WANTransmission(String payload) {
 void LoRaWANDistress() {
   String payload = "DISTRESS";
   for (uint8_t attempt = 0; attempt < MAX_RETRIES; attempt++) {
-    if(IS_DEBUG) {
-      Serial.println("Attempting to send distress signal. Attempt " + String(attempt + 1) + " of " + String(MAX_RETRIES));
-    }
-    if (LoRa_WANTransmission(payload)) {
+    for (uint8_t attempt = 0; attempt < MAX_RETRIES; attempt++) {
       if(IS_DEBUG) {
-        Serial.println("Distress signal sent successfully.");
+        Serial.println("Attempting to send distress signal. Attempt " + String(attempt + 1) + " of " + String(MAX_RETRIES));
       }
-      return; // Distress signal sent successfully, exit function
+      if (LoRa_WANTransmission(payload)) {
+        if(IS_DEBUG) {
+          Serial.println("Distress signal sent successfully.");
+        }
+        return; // Distress signal sent successfully, exit function
+      }
+      // Wait a bit before retrying to avoid spamming the network
+      delay(RETRY_INTERVAL_MS);
     }
-    // Wait a bit before retrying to avoid spamming the network
-    delay(RETRY_INTERVAL_MS);
+    LoRa_initiate(true);
   }
 }
 
 bool HR_initiate() {
-  /*if (!particleSensor.begin(Wire, I2C_SPEED_FAST)) {
+  if (!particleSensor.begin(Wire, I2C_SPEED_FAST)) {
     return false;
   }
   particleSensor.setup(); // Configure sensor with default settings
   particleSensor.setPulseAmplitudeRed(0x0A); // Turn Red LED to low to indicate sensor is running
   particleSensor.setPulseAmplitudeGreen(0); // Turn off Green LED
-  */
+  
   if(IS_DEBUG) {
     Serial.println("Heart rate sensor successfully initialised.");
   }
+  particleSensor.shutDown();
   return true;
 }
 
 void HR_readSensor() {
-  uint8_t BPM, SpO2;
-  //placeholder for sensor reading logic. For demonstration, predefined values
-  BPM = 75; // Example BPM value
-  SpO2 = 98; // Example SpO2 value
+  particleSensor.wakeUp();
+  delay(100);             //wait for wakeup of sensor
+  int i = 0;
+  currentTime = millis();
+  int BPM_sum = 0;
+  particleSensor.setPulseAmplitudeIR(0x1F);
+  while(currentTime - acqusitionStartTime < ACQUISITION_DURATION) {
+    long irValue = particleSensor.getIR();
+    if(checkForBeat(irValue) == true) {
+      if(lastBeat == 0) {
+        lastBeat = millis(); // Initialize lastBeat on first detection
+      } else {
+        long delta = millis() - lastBeat;
+        lastBeat = millis();
+        beatsPerMinute = 60 / (delta / 1000.0);
+        if (beatsPerMinute < 255 && beatsPerMinute > 20) {
+          BPM_sum += beatsPerMinute;
+          i++;
+        }
+      }
+    }
+    currentTime = millis();
+  }
+  particleSensor.setPulseAmplitudeIR(0x00);
+  particleSensor.shutDown();
+  // Calculate average BPM
+  if (i > 0) {
+    beatAvg = BPM_sum / i;
+  } else {
+    beatAvg = 0; // No beats detected
+  }
 
-  //Send data over LoRa
-  String payload = "BPM:" + String(BPM) + ",SpO2:" + String(SpO2);
+  if (IS_DEBUG) {
+    Serial.print("BeatAvg BPM: ");
+    Serial.println(beatAvg);
+  }
+
+  String payload = "BPM:" + String(beatAvg);
+  payload += ",SpO2:NA";
+
   LoRa_WANTransmission(payload);
-  return;
 }
 
 void enterSleep(uint32_t duration, bool deep) {
-  // 1. Put RN2483 to sleep before the ESP32 goes under
-  sleepRN2483();
-
-  // 2. Arm timer wakeup
+  detachInterrupt(digitalPinToInterrupt(GPIO_INTERRUPT));
+  // 1. Arm timer wakeup
   esp_sleep_enable_timer_wakeup(duration * 1000000ULL);
 
-  // 3. Arm GPIO interrupt wakeup
+  // 2. Arm GPIO interrupt wakeup
   configureInterruptPin();
   esp_sleep_enable_ext0_wakeup(
     (gpio_num_t)GPIO_INTERRUPT, 1 // Wake on HIGH signal
@@ -441,11 +509,14 @@ void enterSleep(uint32_t duration, bool deep) {
 
   // ── Deep Sleep ──────────────────────────────────────────────────────────────
   if (deep) {
+    LoRa_cmd("mac pause");
+    sleepRN2483();
     esp_deep_sleep_start();
   }
 
   // ── Light Sleep ─────────────────────────────────────────────────────────────
   else {
+    sleepRN2483();
     esp_light_sleep_start();
 
     esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
@@ -458,16 +529,17 @@ void enterSleep(uint32_t duration, bool deep) {
       } else {
         Serial.println("Woke up from other reason: " + String(cause));
       }
-      Serial.flush();   // ← same fix on the wake side, before any heavy operations
+      Serial.flush();   // same fix on the wake side, before any heavy operations
     }
 
     // Wake RN2483 regardless of cause — it needs to be ready for the next TX
     wakeRN2483();
 
     // Flag an event if woken by interrupt so the caller can react
-    if (cause == ESP_SLEEP_WAKEUP_GPIO) {
+    if (cause == ESP_SLEEP_WAKEUP_EXT0) {
       LoRaWANDistress();
     }
+    configureOperationInterupt();
   }
 }
 
@@ -546,4 +618,22 @@ void configureInterruptPin() {
   rtc_gpio_set_direction((gpio_num_t)GPIO_INTERRUPT, RTC_GPIO_MODE_INPUT_ONLY);  // 2. direction
   rtc_gpio_pulldown_en((gpio_num_t)GPIO_INTERRUPT);                       // 3. pull AFTER init
   rtc_gpio_pullup_dis((gpio_num_t)GPIO_INTERRUPT);
+}
+
+void configureOperationInterupt() {
+  rtc_gpio_deinit((gpio_num_t)GPIO_INTERRUPT);
+  pinMode(GPIO_INTERRUPT, INPUT_PULLDOWN);
+  attachInterrupt(digitalPinToInterrupt(GPIO_INTERRUPT), distressISR, RISING);
+}
+
+void IRAM_ATTR distressISR() {
+  distressTriggered = true;
+}
+
+bool takeDistressFlag() {
+  noInterrupts();
+  bool f = distressTriggered;
+  distressTriggered = false;
+  interrupts();
+  return f;
 }
