@@ -21,7 +21,7 @@ enum DeviceMode {
 const uint8_t LIGHT_SLEEP = 60;          // Time in seconds to sleep for in light sleep mode  
 const uint16_t HR_LOWFREQ_SLEEP = 600;   // Time in seconds to sleep for in low frequency heart rate acquisition mode
 const uint8_t HR_HIGHFREQ_SLEEP = 30;    // Time in seconds to sleep for in high frequency heart rate acquisition mode
-const uint8_t MAX_RETRIES = 5;           // Maximum number of retries for sending distress signal
+const uint8_t MAX_RETRIES = 5;           // Maximum number of retries for sending distress signal^2 --> maximal reinitiation of LoRa module
 const uint16_t RETRY_INTERVAL_MS = 2000; // Time in milliseconds between retries
 
 //Pin definitions
@@ -101,30 +101,30 @@ void setup(){
   if (wakeupReason == ESP_SLEEP_WAKEUP_EXT0) {   // Enters if woken up from deepsleep due to DISTRESS interupt
     if(IS_DEBUG) {
       Serial.println("Woke up from external interrupt. DISTRESS event triggered.");
-      Serial.flush();   // ← same fix on the wake side, before any heavy operations
+      Serial.flush();                 // Waits for completion of serial tasks
     }
     delay(100);
-    LoRa_initiate(false);       // Must reinitate the module after deepsleep. Discussed above
-    LoRaWANDistress(); // Send distress signal on wakeup from external interrupt
-    configureOperationInterupt();
+    LoRa_initiate(false);             // Must reinitate the module after deepsleep. LoRa losses its internal state, simple serial break (as instructed by the datasheet) does not bring it back properly
+    LoRaWANDistress();                // Send distress signal on wakeup from external interrupt
+    configureOperationInterupt();     // Configures in operation interupt for distress signal while device is awake
   } else 
   if(wakeupReason == ESP_SLEEP_WAKEUP_TIMER) {      // Enters if woken up from deepsleep due to normal operation
     configureOperationInterupt();
-    if(IS_DEBUG) {
+    if(IS_DEBUG) {                    // Configures in operation interupt for distress signal while device is awake
       Serial.println("Woke up from timer. Current mode: " + String(currentMode));
-      Serial.flush();   // ← same fix on the wake side, before any heavy operations
+      Serial.flush();                 // Waits for completion of serial tasks
     }
-    //This is indeed not great, it should not need to be initiated again. However after extensive debugging, the module cannot reconnect consistently after ESP deep-sleep. Further discussed in the report
+    //This is indeed not great, it should not need to be initiated again. However after extensive debugging, the module cannot reconnect consistently using serial break after ESP deep-sleep.
     LoRa_initiate(false);
     // Sad sad
     delay(100);
     //wakeRN2483(); Would need if it were to correctly exit the deep sleep. However as noted above complete reinitation is necesarry
   }
   else {
-    configureOperationInterupt();
+    configureOperationInterupt();     // Configures in operation interupt for distress signal while device is awake
     if(IS_DEBUG) {
       while(Serial.available() == 0) {
-        // Wait for serial connection, operator must press a button
+        // Wait for serial connection, operator must press a button!!!!!!!
       }
       Serial.println("Serial communication initialised.");
       Serial.println("Woke up from other reason: " + String(wakeupReason));
@@ -202,7 +202,7 @@ String toHex(const String& s) {         // To convert strigns to HEX format for 
   return hex;
 }
 
-String fromHex(const String& hex) {     // To convert HEX transmissions to readable string values. Not relevant in this applicaiton
+String fromHex(const String& hex) {     // To convert HEX transmissions to readable string values. Not used in this applicaiton
   String result = "";
   for (size_t i = 0; i + 1 < hex.length(); i += 2) {
     char buf[3] = { hex[i], hex[i+1], '\0' };
@@ -211,7 +211,7 @@ String fromHex(const String& hex) {     // To convert HEX transmissions to reada
   return result;
 }
 
-void LoRa_flushInput() {              // Wait for LoRa serial to finish any processes, avoid collissions
+void LoRa_flushInput() {              // Wait for LoRa serial to finish any processes, avoid collissions. Note, it halts operation, could be improved
   while (loraSerial.available()) {
     loraSerial.read();
   }
@@ -232,7 +232,7 @@ String LoRa_cmd(String s) {           // Raw serial command function, to format 
   return response;
 }
 
-bool LoRa_initiate(bool first = true) {   // Use this funciton to initate the LoRa module. bool first has been introduced, so initiation after deep sleep does not run MAC configuration again
+bool LoRa_initiate(bool first = true) {   // Use this funciton to initate the LoRa module. bool first has been introduced, so initiation after deep sleep does not run MAC configuration again (its stroed on the chip)
   // Initialize LoRa serial communication
   loraSerial.begin(BAUD_RATE, SERIAL_8N1, RXD2_LORA, TXD2_LORA);
   loraSerial.setTimeout(LORA_TIME_OUT);
@@ -309,6 +309,7 @@ bool LoRa_initiate(bool first = true) {   // Use this funciton to initate the Lo
       return false;
     }
   }
+  // restart MAC/LoRaWAN stack
   cmd = "mac resume";
   response = LoRa_cmd(cmd);
   if(response != "ok") {
@@ -317,6 +318,7 @@ bool LoRa_initiate(bool first = true) {   // Use this funciton to initate the Lo
     }
     return false;
   }
+  //OTAA procedure
   response = LoRa_cmd("mac join otaa");
   if(response != "ok") {
     if(IS_DEBUG) {
@@ -334,7 +336,7 @@ bool LoRa_initiate(bool first = true) {   // Use this funciton to initate the Lo
       Serial.println("Successfully joined LoRaWAN network.");
     }
   }
-
+  //Set device class to Class A, see LoRaWAN protocol
   cmd = "mac set class a";
   response = LoRa_cmd(cmd);
   if(response != "ok") {
@@ -346,10 +348,12 @@ bool LoRa_initiate(bool first = true) {   // Use this funciton to initate the Lo
   return response.length() > 0; // If we get a response, the module is working
 }
 
-bool LoRa_WANTransmission(String payload) {
+bool LoRa_WANTransmission(String payload) {   // Main transmission comamnd. It serves as the device mode change as well, as downlink is received right after transmission (see LoRaWAN documentation on Class A device)
+  // Setting up transmission package
   String hexPayload = toHex(payload);
   String cmd = "mac tx cnf 1 " + hexPayload;
   String downlinkData = "";
+  // Immediate answer from LoRa module, expect ok indication for good UART command
   if(IS_DEBUG) {
     Serial.println("Sending payload: " + payload + " (hex: " + hexPayload + ")");
   }
@@ -360,24 +364,26 @@ bool LoRa_WANTransmission(String payload) {
     }
     return false; // Return on failure to avoid changing state
   }
-  // Wait for transmission result
+
+  // Wait for transmission result (and possible downlink)
   response = loraSerial.readStringUntil('\n');
   if(IS_DEBUG) {
     Serial.println("Transmission response: " + response);
   }
-  if (response.startsWith("mac_rx")) {
+  if (response.startsWith("mac_rx")) {      // enters if there was proper downlink from the gateway. Received payload must be parsed according to format
       // Format: "mac_rx <port> <hexdata>"
       downlinkData = response.substring(response.lastIndexOf(' ') + 1);
       if(IS_DEBUG) {
         Serial.println("Downlink received on port " + response.substring(7, response.indexOf(' ', 7)) + ": " + downlinkData);
       }
   }
+  // Normal operation answer if no downlink was in the gateway buffer
   else if (response.startsWith("mac_tx_ok")) {
     if(IS_DEBUG) {
       Serial.println("Payload sent successfully, no downlink received.");
     }
     return true; // Stay in current mode on successful transmission
-  } else if (response.startsWith("mac_err")) {
+  } else if (response.startsWith("mac_err")) {      // Enters if module works, but transmission fails (e.g.: gateway out of reach)
     if(IS_DEBUG) {
       Serial.println("Error sending payload. Response: " + response);
       Serial.println("Entering light sleep to save power until next transmission opportunity.");
@@ -385,6 +391,7 @@ bool LoRa_WANTransmission(String payload) {
     return false; // Return current mode on failure to avoid changing state
   }
 
+  // Mode handling for operator set sampling rate
   if (downlinkData.startsWith("01")) {
     currentMode = HR_LOWFREQ;
     if(IS_DEBUG) {
@@ -407,9 +414,11 @@ bool LoRa_WANTransmission(String payload) {
   return true;
 }
 
-void LoRaWANDistress() {
-  String payload = "DISTRESS";
+void LoRaWANDistress() {      // Distress function, to transmit the SOS signal to the backend
+  String payload = "DISTRESS";    // SPecify payload
+  // Outer loop, for attempts of reinitation of LoRa module
   for (uint8_t attempt = 0; attempt < MAX_RETRIES; attempt++) {
+    // Inner loop for attempts of transmission
     for (uint8_t attempt = 0; attempt < MAX_RETRIES; attempt++) {
       if(IS_DEBUG) {
         Serial.println("Attempting to send distress signal. Attempt " + String(attempt + 1) + " of " + String(MAX_RETRIES));
@@ -427,7 +436,7 @@ void LoRaWANDistress() {
   }
 }
 
-bool HR_initiate() {
+bool HR_initiate() {          // Simple hardware configuration with I2C communication
   if (!particleSensor.begin(Wire, I2C_SPEED_FAST)) {
     return false;
   }
@@ -442,13 +451,14 @@ bool HR_initiate() {
   return true;
 }
 
-void HR_readSensor() {
-  particleSensor.wakeUp();
-  delay(100);             //wait for wakeup of sensor
+void HR_readSensor() {        // HR sampling of the sensor. Note! The SpO2 reading was not implemented
+  particleSensor.wakeUp();    // Wakes up device from power saving mode (e.g.: switches on the LEDs)
+  delay(100);                 //wait for wakeup of sensor
   int i = 0;
   currentTime = millis();
   int BPM_sum = 0;
   particleSensor.setPulseAmplitudeIR(0x1F);
+  // Acquire data in the specified acqusition duration time window. Looks for beats and takes the average time (already converted to BPM) bewteen two beats
   while(currentTime - acqusitionStartTime < ACQUISITION_DURATION) {
     long irValue = particleSensor.getIR();
     if(checkForBeat(irValue) == true) {
@@ -466,8 +476,8 @@ void HR_readSensor() {
     }
     currentTime = millis();
   }
-  particleSensor.setPulseAmplitudeIR(0x00);
-  particleSensor.shutDown();
+  particleSensor.setPulseAmplitudeIR(0x00);       //Switches of LEDs (shutDOwn should take care of this, but just in case)
+  particleSensor.shutDown();                      // Powers down the HR module
   // Calculate average BPM
   if (i > 0) {
     beatAvg = BPM_sum / i;
@@ -481,17 +491,18 @@ void HR_readSensor() {
   }
 
   String payload = "BPM:" + String(beatAvg);
-  payload += ",SpO2:NA";
+  payload += ",SpO2:NA";                          // No SpO2 acqusition was implemented
 
   LoRa_WANTransmission(payload);
 }
 
-void enterSleep(uint32_t duration, bool deep) {
+void enterSleep(uint32_t duration, bool deep) {       // Sets up the whole sleep procedure for both the ESP and the RN, light or deep based on boolean parameter
+  // 0. Detaches in operation interupt. Note there is a small possibility of an interupt happening between this line, and the complete sleep of the system, which would be not catched. No workaround found during implementation
   detachInterrupt(digitalPinToInterrupt(GPIO_INTERRUPT));
-  // 1. Arm timer wakeup
+  // 1. Arm timer wakeup for ESP
   esp_sleep_enable_timer_wakeup(duration * 1000000ULL);
 
-  // 2. Arm GPIO interrupt wakeup
+  // 2. Arm RTX interrupt wakeup
   configureInterruptPin();
   esp_sleep_enable_ext0_wakeup(
     (gpio_num_t)GPIO_INTERRUPT, 1 // Wake on HIGH signal
@@ -504,14 +515,15 @@ void enterSleep(uint32_t duration, bool deep) {
       Serial.println("Entering light sleep for " + String(duration) + " seconds...");
     }
     delay(100); // Short delay to ensure message is sent before sleeping
-    Serial.flush();   // ← blocks until every byte is physically transmitted
+    Serial.flush();   // blocks until every byte is physically transmitted (saw some garbage on the UART when implemented without it)
   }
 
   // ── Deep Sleep ──────────────────────────────────────────────────────────────
   if (deep) {
-    LoRa_cmd("mac pause");
+    LoRa_cmd("mac pause");      // Pauses mac to ensure known state at initialization. May not be important, stayed for redundancy
     sleepRN2483();
     esp_deep_sleep_start();
+    // Program never reaches this line (if deep sleep) as after wakeup event, the code jumps to void setup()
   }
 
   // ── Light Sleep ─────────────────────────────────────────────────────────────
@@ -519,7 +531,7 @@ void enterSleep(uint32_t duration, bool deep) {
     sleepRN2483();
     esp_light_sleep_start();
 
-    esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
+    esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();      // Similar operation than in void setup(), based on wakeup cause, the next course of action is decided
 
     if (IS_DEBUG) {
       if (cause == ESP_SLEEP_WAKEUP_TIMER) {
@@ -529,24 +541,24 @@ void enterSleep(uint32_t duration, bool deep) {
       } else {
         Serial.println("Woke up from other reason: " + String(cause));
       }
-      Serial.flush();   // same fix on the wake side, before any heavy operations
+      Serial.flush();   // same fix on the wake side, before any heavy operations we flush the serial monitor for any garbage
     }
 
     // Wake RN2483 regardless of cause — it needs to be ready for the next TX
     wakeRN2483();
 
-    // Flag an event if woken by interrupt so the caller can react
+    // Send distress signal in case of external interupt during light sleep
     if (cause == ESP_SLEEP_WAKEUP_EXT0) {
       LoRaWANDistress();
     }
-    configureOperationInterupt();
+    configureOperationInterupt();       //Configure in operation itnerupt, the distress during oepration is alive after this point
   }
 }
 
-void wakeRN2483() {
+void wakeRN2483() {           //Wakeup funciton for the RN LoRa module. Following documentation it just needs an appropiate serial break on the respective pins. However this always failed after deepsleep (while functionoing correctly after light sleep)
   if (IS_DEBUG) Serial.println("[LoRa] Waking up RN2483");
 
-  const uint8_t MAX_WAKE_RETRIES = 5;
+  const uint8_t MAX_WAKE_RETRIES = 5;       // Parameter of max wakeup attempts before complete reinialization of the module
 
   for (uint8_t attempt = 1; attempt <= MAX_WAKE_RETRIES; attempt++) {
     if (IS_DEBUG) {
@@ -557,7 +569,7 @@ void wakeRN2483() {
     loraSerial.end();
     delay(50);
 
-    // 2. Drive TX manually to create BREAK
+    // 2. Drive TX manually to create BREAK condition (see documentation)
     pinMode(TXD2_LORA, OUTPUT);
     digitalWrite(TXD2_LORA, LOW);
     delay(20);   // BREAK pulse
@@ -605,32 +617,32 @@ void wakeRN2483() {
   return;
 }
 
-void sleepRN2483() {
-  loraSerial.println("sys sleep 600000");
+void sleepRN2483() {          // Puts the LoRa module to sleep
+  loraSerial.println("sys sleep 600000");       // could be higher sleep time
   delay(50);  // give it time to acknowledge and enter sleep
   loraSerial.flush(); // Ensure command is sent before ending UART
   loraSerial.end(); // End UART to save power while RN2483 is asleep
   if (IS_DEBUG) Serial.println("[LoRa] RN2483 sent to sleep.");
 }
 
-void configureInterruptPin() {
+void configureInterruptPin() {    // RTC interupt for wakeup of system from sleep -- flags distress, handeled in main body code
   rtc_gpio_init((gpio_num_t)GPIO_INTERRUPT);                              // 1. init first
   rtc_gpio_set_direction((gpio_num_t)GPIO_INTERRUPT, RTC_GPIO_MODE_INPUT_ONLY);  // 2. direction
   rtc_gpio_pulldown_en((gpio_num_t)GPIO_INTERRUPT);                       // 3. pull AFTER init
   rtc_gpio_pullup_dis((gpio_num_t)GPIO_INTERRUPT);
 }
 
-void configureOperationInterupt() {
+void configureOperationInterupt() {   // GPIO interupt for during operation, when button is pressed while not sleeping, this interupt is used (this is only initalization here)
   rtc_gpio_deinit((gpio_num_t)GPIO_INTERRUPT);
   pinMode(GPIO_INTERRUPT, INPUT_PULLDOWN);
   attachInterrupt(digitalPinToInterrupt(GPIO_INTERRUPT), distressISR, RISING);
 }
 
-void IRAM_ATTR distressISR() {
+void IRAM_ATTR distressISR() {        // IRAM GPIO interupt, its called when button is pressed during operation of the MCU. Uses other ram seciton, therefore no heavy operations possible right here. Only flagging is allowed, distress signal is sent in main body
   distressTriggered = true;
 }
 
-bool takeDistressFlag() {
+bool takeDistressFlag() {             // Experienced some issues related to flag operation, corrected version, to ensure reliable reading
   noInterrupts();
   bool f = distressTriggered;
   distressTriggered = false;
