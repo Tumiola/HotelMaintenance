@@ -13,7 +13,7 @@
 #define TXD2 26
 
 // Sleep interval for testing 30 seconds, change to 60 min
-#define SLEEP_SECONDS       30
+#define SLEEP_SECONDS       3600
 #define uS_TO_S             1000000ULL
 
 // XIAO reply timeout
