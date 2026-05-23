@@ -152,7 +152,7 @@ void loop(){
   {
   case INITIATE:
     // Initial state, parking in lightsleep while operator configures device
-    LoRa_WANTransmission("INITIATED");
+    LoRa_WANTransmission(toHex("INITIATED"));
     if(takeDistressFlag()){
       LoRaWANDistress();
     }
@@ -350,7 +350,8 @@ bool LoRa_initiate(bool first = true) {   // Use this funciton to initate the Lo
 
 bool LoRa_WANTransmission(String payload) {   // Main transmission comamnd. It serves as the device mode change as well, as downlink is received right after transmission (see LoRaWAN documentation on Class A device)
   // Setting up transmission package
-  String hexPayload = toHex(payload);
+  //String hexPayload = toHex(payload);       // Initial payload structure, changed to fit backend side application.
+  String hexPayload = payload; // No need to convert to hex, as the payload is already formatted.
   String cmd = "mac tx cnf 1 " + hexPayload;
   String downlinkData = "";
   // Immediate answer from LoRa module, expect ok indication for good UART command
@@ -415,7 +416,7 @@ bool LoRa_WANTransmission(String payload) {   // Main transmission comamnd. It s
 }
 
 void LoRaWANDistress() {      // Distress function, to transmit the SOS signal to the backend
-  String payload = "DISTRESS";    // SPecify payload
+  String payload = "040101";    // SSpecify payload
   // Outer loop, for attempts of reinitation of LoRa module
   for (uint8_t attempt = 0; attempt < MAX_RETRIES; attempt++) {
     // Inner loop for attempts of transmission
@@ -490,8 +491,17 @@ void HR_readSensor() {        // HR sampling of the sensor. Note! The SpO2 readi
     Serial.println(beatAvg);
   }
 
-  String payload = "BPM:" + String(beatAvg);
-  payload += ",SpO2:NA";                          // No SpO2 acqusition was implemented
+  // Old payload structure, changed to fit backend side application. Now the payload is directly formated as hex, so no need for conversion
+  //String payload = "BPM:" + String(beatAvg);
+  //payload += ",SpO2:NA";                          // No SpO2 acqusition was implemented
+
+  String payload = "0301";                          // Payload head, 03 for node ID, 01 for data length
+  String beatAvg_hex = String(beatAvg, HEX);
+  beatAvg_hex.toUpperCase();
+  if (beatAvg_hex.length() == 1) {
+    beatAvg_hex = "0" + beatAvg_hex;
+  }
+  payload += beatAvg_hex;   // e.g. "030148" for 72 BPM
 
   LoRa_WANTransmission(payload);
 }
@@ -593,8 +603,7 @@ void wakeRN2483() {           //Wakeup funciton for the RN LoRa module. Followin
     String resp = LoRa_cmd("sys get ver");
     resp.trim();
 
-    bool wakeOk = resp.length() > 0 &&
-                  resp.indexOf("RN2483") != -1;
+    bool wakeOk = resp.length() > 0 && resp.indexOf("RN2483") != -1;
 
     if (IS_DEBUG) {
       Serial.print("[LoRa] Wake response: '");
