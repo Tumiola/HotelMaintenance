@@ -5,9 +5,17 @@
  * 30 September 2016
  */
 
+// ─── Device config — change this per device (1–50) ───────────────────────────
+#define DEVICE_ID         1       // <<< CHANGE THIS per device
+#define BASE_INTERVAL_MS  10000  // Base delay between sends (10 seconds)
+#define JITTER_MS         8000   // Random jitter added on top (0–8 seconds)
+// Each device will send every 10–18 seconds, randomly.
+// With 50 devices this spreads traffic and minimises collisions.
+
 #include <HardwareSerial.h>
 #define TX1 D18;
 #define RX1 D19;
+#define LED_PIN 13
 HardwareSerial loraSerial(1);
 
 String str;
@@ -118,31 +126,48 @@ void setup() {
   str = loraSerial.readStringUntil('\n');
   Serial.println(str);
 
+  randomSeed(esp_random());
+
   Serial.println("starting loop");
 }
+uint16_t counter = 0;
 
 void loop() {
   led_on();
+  String payload = buildPayload(counter);
   // Try sending this: 010102 01020929 01020947 from hex
-  loraSerial.println("radio tx 010102010209290102094700");
+  Serial.printf("[TX] Device:%02d Counter:%05d Payload:%s\n",
+                DEVICE_ID, counter, payload.c_str());
+  loraSerial.println("radio tx " + payload);
   str = loraSerial.readStringUntil('\n');
   Serial.println(str);
   str = loraSerial.readStringUntil('\n');
   Serial.println(str);
   led_off();
-  delay(200);
+  counter++;
+  //delay(200);
+  uint32_t waitMs = BASE_INTERVAL_MS + random(0, JITTER_MS);
+  Serial.printf("Next TX in %lums\n", waitMs);
+  delay(waitMs);
 }
 
 void lora_autobaud() {
   String response = "";
   while (response == "") {
     delay(1000);
-    loraSerial.write((byte)0x00);
-    loraSerial.write(0x55);
+    loraSerial.write((uint8_t)0x00);
+    loraSerial.write((uint8_t)0x55);
     loraSerial.println();
     loraSerial.println("sys get ver");
     response = loraSerial.readStringUntil('\n');
   }
+}
+
+String buildPayload(uint16_t counter) {
+  char buf[9];
+  sprintf(buf, "%02X%02X%04X", DEVICE_ID, 0x01, counter);
+  // 0x01 = MSG_TYPE heartbeat. We'll add more types when we do the handshake.
+  return String(buf);
 }
 
 /*
