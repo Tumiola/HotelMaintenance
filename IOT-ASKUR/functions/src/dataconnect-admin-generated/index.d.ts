@@ -15,6 +15,7 @@ export enum SensorType {
   ACCELEROMETER = "ACCELEROMETER",
   MOTION = "MOTION",
   SOUND = "SOUND",
+  SLEEP_EVENT = "SLEEP_EVENT",
 }
 
 export interface Building_Key {
@@ -47,6 +48,38 @@ export interface CreateSensorVariables {
   serialNumber?: string | null;
   locationDetails?: string | null;
   createdAt: TimestampString;
+}
+
+export interface ListSensorReadingsData {
+  sensorReadings: ({
+    id: UUIDString;
+    value: number;
+    unit?: string | null;
+    description?: string | null;
+    timestamp: TimestampString;
+    sensor: {
+      id: UUIDString;
+      name: string;
+      type: SensorType;
+      unit: string;
+      serialNumber?: string | null;
+      locationDetails?: string | null;
+      sensorCollection: {
+        id: UUIDString;
+        name: string;
+        room: {
+          id: UUIDString;
+          name: string;
+          floor?: number | null;
+          building: {
+            id: UUIDString;
+            name: string;
+            address?: string | null;
+          } & Building_Key;
+        } & Room_Key;
+      } & SensorCollection_Key;
+    } & Sensor_Key;
+  } & SensorReading_Key)[];
 }
 
 export interface ListSensorsData {
@@ -92,4 +125,9 @@ export function createSensorReading(vars: CreateSensorReadingVariables, options?
 export function listSensors(dc: DataConnect, options?: OperationOptions): Promise<ExecuteOperationResponse<ListSensorsData>>;
 /** Generated Node Admin SDK operation action function for the 'ListSensors' Query. Allow users to pass in custom DataConnect instances. */
 export function listSensors(options?: OperationOptions): Promise<ExecuteOperationResponse<ListSensorsData>>;
+
+/** Generated Node Admin SDK operation action function for the 'ListSensorReadings' Query. Allow users to execute without passing in DataConnect. */
+export function listSensorReadings(dc: DataConnect, options?: OperationOptions): Promise<ExecuteOperationResponse<ListSensorReadingsData>>;
+/** Generated Node Admin SDK operation action function for the 'ListSensorReadings' Query. Allow users to pass in custom DataConnect instances. */
+export function listSensorReadings(options?: OperationOptions): Promise<ExecuteOperationResponse<ListSensorReadingsData>>;
 

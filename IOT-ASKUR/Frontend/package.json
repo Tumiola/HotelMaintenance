@@ -1,0 +1,17 @@
+{
+  "name": "frontend",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@dataconnect/generated": "file:dataconnect-generated",
+    "firebase": "^12.13.0",
+    "firebase-admin": "^13.10.0"
+  }
+}

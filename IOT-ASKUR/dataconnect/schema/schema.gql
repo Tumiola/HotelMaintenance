@@ -6,6 +6,7 @@ enum SensorType {
   ACCELEROMETER
   MOTION
   SOUND
+  SLEEP_EVENT
 }
 
 type Building @table {

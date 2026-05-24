@@ -8,6 +8,7 @@ export const SensorType = {
   ACCELEROMETER: "ACCELEROMETER",
   MOTION: "MOTION",
   SOUND: "SOUND",
+  SLEEP_EVENT: "SLEEP_EVENT",
 }
 
 export const connectorConfig = {
@@ -32,5 +33,11 @@ export function listSensors(dcOrOptions, options) {
   const { dc: dcInstance, options: inputOpts} = validateAdminArgs(connectorConfig, dcOrOptions, options, undefined);
   dcInstance.useGen(true);
   return dcInstance.executeQuery('ListSensors', undefined, inputOpts);
+}
+
+export function listSensorReadings(dcOrOptions, options) {
+  const { dc: dcInstance, options: inputOpts} = validateAdminArgs(connectorConfig, dcOrOptions, options, undefined);
+  dcInstance.useGen(true);
+  return dcInstance.executeQuery('ListSensorReadings', undefined, inputOpts);
 }
 

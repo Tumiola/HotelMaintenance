@@ -196,7 +196,7 @@
 <body>
   <header>
     <h1>Lorca Sensor Dashboard</h1>
-    <p>Live overview of room-node telemetry received through LoRa/LoRaWAN and stored in Firebase Data Connect.</p>
+    <p>Live overview of room-node telemetry received through LoRa/LoRaWAN and stored in Firebase Firestore.</p>
   </header>
 
   <main>
@@ -208,13 +208,14 @@
           <option value="all">All sensor types</option>
           <option value="TEMPERATURE">Temperature</option>
           <option value="HUMIDITY">Humidity</option>
-          <option value="CO2">CO2</option>
-          <option value="HEART_RATE">Heart rate</option>
+          <option value="HEARTRATE">Heart rate</option>
+          <option value="SLEEP_EVENT">Sleep event</option>
         </select>
 
-        <button id="refreshButton">Refresh data</button>
+        <button id="refreshButton">Reconnect</button>
+        <button id="localRandomButton">Start local random data</button>
       </div>
-      <p id="status" class="status">Waiting for data...</p>
+      <p id="status" class="status">Connecting to Firestore...</p>
     </section>
 
     <section class="cards">
@@ -247,6 +248,7 @@
         <thead>
           <tr>
             <th>Time</th>
+            <th>Building</th>
             <th>Room</th>
             <th>Device</th>
             <th>Sensor</th>
@@ -256,107 +258,48 @@
         </thead>
         <tbody id="sensorTableBody">
           <tr>
-            <td colspan="6" class="empty">No readings loaded.</td>
+            <td colspan="7" class="empty">No readings loaded.</td>
           </tr>
         </tbody>
       </table>
     </section>
   </main>
 
-  <script>
-    // Replace this with your deployed HTTPS Cloud Function endpoint.
-    // It should return JSON in the shape shown in fallbackReadings below.
-    const API_URL = "https://YOUR_REGION-YOUR_PROJECT.cloudfunctions.net/getSensorReadings";
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/12.0.0/firebase-app.js";
+    import {
+      getFirestore,
+      collection,
+      query,
+      orderBy,
+      limit,
+      onSnapshot
+    } from "https://www.gstatic.com/firebasejs/12.0.0/firebase-firestore.js";
 
-    const fallbackReadings = [
-  {
-    timestamp: "2026-05-14T12:01:30Z",
-    roomName: "Room 101",
-    deviceId: "node-01",
-    sensorType: "TEMPERATURE",
-    value: 23.45,
-    unit: "°C"
-  },
-  {
-    timestamp: "2026-05-14T12:01:30Z",
-    roomName: "Room 101",
-    deviceId: "node-01",
-    sensorType: "HUMIDITY",
-    value: 41.2,
-    unit: "%"
-  },
-  {
-    timestamp: "2026-05-14T12:03:10Z",
-    roomName: "Room 204",
-    deviceId: "node-12",
-    sensorType: "HEART_RATE",
-    value: 72,
-    unit: "bpm"
-  },
-  {
-    timestamp: "2026-05-14T12:04:12Z",
-    roomName: "Room 101",
-    deviceId: "node-01",
-    sensorType: "TEMPERATURE",
-    value: 23.62,
-    unit: "°C"
-  },
-  {
-    timestamp: "2026-05-14T12:05:45Z",
-    roomName: "Room 101",
-    deviceId: "node-01",
-    sensorType: "TEMPERATURE",
-    value: 23.71,
-    unit: "°C"
-  },
-  {
-    timestamp: "2026-05-14T12:06:18Z",
-    roomName: "Room 204",
-    deviceId: "node-12",
-    sensorType: "HEART_RATE",
-    value: 75,
-    unit: "bpm"
-  },
-  {
-    timestamp: "2026-05-14T12:07:02Z",
-    roomName: "Room 204",
-    deviceId: "node-12",
-    sensorType: "HEART_RATE",
-    value: 71,
-    unit: "bpm"
-  },
-  {
-    timestamp: "2026-05-14T12:07:55Z",
-    roomName: "Room 305",
-    deviceId: "node-07",
-    sensorType: "CO2",
-    value: 612,
-    unit: "ppm"
-  },
-  {
-    timestamp: "2026-05-14T12:08:44Z",
-    roomName: "Room 305",
-    deviceId: "node-07",
-    sensorType: "HUMIDITY",
-    value: 38.7,
-    unit: "%"
-  },
-  {
-    timestamp: "2026-05-14T12:09:31Z",
-    roomName: "Room 102",
-    deviceId: "node-03",
-    sensorType: "TEMPERATURE",
-    value: 22.91,
-    unit: "°C"
-  }
-];
+    const firebaseConfig = {
+      apiKey: "AIzaSyCBBJ5jBVtSOCH-K1dya_lJwi_vWxR_UmA",
+      authDomain: "iot-sleeping.firebaseapp.com",
+      projectId: "iot-sleeping",
+      storageBucket: "iot-sleeping.firebasestorage.app",
+      messagingSenderId: "884808606708",
+      appId: "1:884808606708:web:78b386572ba1f1fd808fa1",
+      measurementId: "G-HJNE1PY9X7"
+    };
 
+    const app = initializeApp(firebaseConfig);
+    const db = getFirestore(app);
+
+    let unsubscribeFromFirestore = null;
     let readings = [];
+    let totalReadingCount = 0;
+    let localRandomEnabled = false;
+    let localRandomIntervalId = null;
 
     const tableBody = document.getElementById("sensorTableBody");
     const searchInput = document.getElementById("searchInput");
     const typeFilter = document.getElementById("typeFilter");
     const refreshButton = document.getElementById("refreshButton");
+    const localRandomButton = document.getElementById("localRandomButton");
     const statusText = document.getElementById("status");
 
     const totalReadings = document.getElementById("totalReadings");
@@ -369,20 +312,55 @@
     const chartContext = historyChart.getContext("2d");
 
     function formatTime(timestamp) {
+      if (!timestamp) return "—";
+
+      if (typeof timestamp.toDate === "function") {
+        return timestamp.toDate().toLocaleString(undefined, {
+          dateStyle: "short",
+          timeStyle: "medium"
+        });
+      }
+
       return new Date(timestamp).toLocaleString(undefined, {
         dateStyle: "short",
         timeStyle: "medium"
       });
     }
 
+    function timestampToMillis(timestamp) {
+      if (!timestamp) return 0;
+      if (typeof timestamp.toMillis === "function") return timestamp.toMillis();
+      return new Date(timestamp).getTime();
+    }
+
+    function normalizeSensorReading(docSnapshot) {
+      const data = docSnapshot.data();
+
+      return {
+        id: docSnapshot.id,
+        timestamp: data.timestamp,
+        buildingId: data.buildingId,
+        buildingName: data.buildingName ?? "Unknown building",
+        roomId: data.roomId,
+        roomName: data.roomName ?? "Unknown room",
+        sensorCollectionId: data.sensorCollectionId,
+        sensorId: data.sensorId,
+        sensorName: data.sensorName ?? "Unknown sensor",
+        deviceId: data.deviceId ?? "unknown-device",
+        sensorType: data.sensorType ?? "UNKNOWN",
+        value: Number(data.value),
+        unit: data.unit ?? ""
+      };
+    }
+
     function getFilteredReadings() {
-      const query = searchInput.value.trim().toLowerCase();
+      const queryText = searchInput.value.trim().toLowerCase();
       const selectedType = typeFilter.value;
 
       return readings.filter((reading) => {
         const matchesType = selectedType === "all" || reading.sensorType === selectedType;
-        const searchable = `${reading.roomName} ${reading.deviceId} ${reading.sensorType}`.toLowerCase();
-        const matchesSearch = searchable.includes(query);
+        const searchable = `${reading.buildingName} ${reading.roomName} ${reading.deviceId} ${reading.sensorType} ${reading.sensorName}`.toLowerCase();
+        const matchesSearch = searchable.includes(queryText);
         return matchesType && matchesSearch;
       });
     }
@@ -396,8 +374,8 @@
       }
 
       const points = filtered
-        .filter((reading) => typeof reading.value === "number")
-        .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+        .filter((reading) => typeof reading.value === "number" && !Number.isNaN(reading.value))
+        .sort((a, b) => timestampToMillis(a.timestamp) - timestampToMillis(b.timestamp));
 
       chartSection.classList.add("visible");
       chartTitle.textContent = `${selectedType} history`;
@@ -470,27 +448,120 @@
       });
     }
 
+    function generateLocalRandomReading() {
+      const sensorTemplates = [
+        {
+          sensorId: "sensor-temp-room-101",
+          sensorName: "Room 101 Temperature",
+          sensorType: "TEMPERATURE",
+          unit: "°C",
+          min: 20,
+          max: 26,
+          decimals: 2
+        },
+        {
+          sensorId: "sensor-humidity-room-101",
+          sensorName: "Room 101 Humidity",
+          sensorType: "HUMIDITY",
+          unit: "%",
+          min: 30,
+          max: 55,
+          decimals: 1
+        },
+        {
+          sensorId: "sensor-heartrate-room-101",
+          sensorName: "Room 101 Heart Rate",
+          sensorType: "HEARTRATE",
+          unit: "bpm",
+          min: 58,
+          max: 95,
+          decimals: 0
+        },
+        {
+          sensorId: "sensor-sleep-event-room-101",
+          sensorName: "Room 101 Sleep Events",
+          sensorType: "SLEEP_EVENT",
+          unit: "event",
+          min: 0,
+          max: 3,
+          decimals: 0
+        }
+      ];
+
+      const sensor = sensorTemplates[Math.floor(Math.random() * sensorTemplates.length)];
+      const rawValue = Math.random() * (sensor.max - sensor.min) + sensor.min;
+      const value = sensor.decimals === 0 ? Math.round(rawValue) : Number(rawValue.toFixed(sensor.decimals));
+
+      return {
+        id: `local-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        timestamp: new Date().toISOString(),
+        buildingId: "building-demo-01",
+        buildingName: "Demo Medical Hotel",
+        roomId: "room-101",
+        roomName: "Room 101",
+        sensorCollectionId: "room-101-node",
+        sensorId: sensor.sensorId,
+        sensorName: sensor.sensorName,
+        deviceId: "local-node-01",
+        sensorType: sensor.sensorType,
+        value,
+        unit: sensor.unit,
+        isLocalRandom: true
+      };
+    }
+
+    function addLocalRandomReading() {
+      readings.unshift(generateLocalRandomReading());
+      totalReadingCount += 1;
+
+      if (readings.length > 100) {
+        readings = readings.slice(0, 100);
+      }
+
+      render();
+    }
+
+    function setLocalRandomGeneration(enabled) {
+      localRandomEnabled = enabled;
+
+      if (localRandomIntervalId) {
+        clearInterval(localRandomIntervalId);
+        localRandomIntervalId = null;
+      }
+
+      if (localRandomEnabled) {
+        addLocalRandomReading();
+        localRandomIntervalId = setInterval(addLocalRandomReading, 3000);
+        localRandomButton.textContent = "Stop local random data";
+        statusText.textContent = "Local random data enabled. These readings are not written to Firestore.";
+      } else {
+        localRandomButton.textContent = "Start local random data";
+        statusText.textContent = "Local random data stopped. Firestore listener still active.";
+      }
+    }
+
     function render() {
       const filtered = getFilteredReadings();
 
-      totalReadings.textContent = readings.length;
+      totalReadings.textContent = totalReadingCount;
       activeDevices.textContent = new Set(readings.map((reading) => reading.deviceId)).size;
 
-      const latest = [...readings].sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))[0];
+      const latest = [...readings].sort((a, b) => timestampToMillis(b.timestamp) - timestampToMillis(a.timestamp))[0];
       latestReading.textContent = latest ? `${latest.value} ${latest.unit}` : "—";
 
       drawHistoryChart(filtered);
 
       if (filtered.length === 0) {
-        tableBody.innerHTML = `<tr><td colspan="6" class="empty">No matching readings.</td></tr>`;
+        tableBody.innerHTML = `<tr><td colspan="7" class="empty">No matching readings.</td></tr>`;
         return;
       }
 
       tableBody.innerHTML = filtered
-        .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
+        .sort((a, b) => timestampToMillis(b.timestamp) - timestampToMillis(a.timestamp))
         .map((reading) => `
           <tr>
             <td>${formatTime(reading.timestamp)}</td>
+            <td>${reading.buildingName ?? "—"}</td>
             <td>${reading.roomName ?? "—"}</td>
             <td>${reading.deviceId ?? "—"}</td>
             <td><span class="badge">${reading.sensorType}</span></td>
@@ -501,33 +572,42 @@
         .join("");
     }
 
-    async function loadReadings() {
-      statusText.textContent = "Loading sensor data...";
-
-      try {
-        const response = await fetch(API_URL);
-
-        if (!response.ok) {
-          throw new Error(`HTTP ${response.status}`);
-        }
-
-        const data = await response.json();
-        readings = Array.isArray(data) ? data : data.readings;
-        statusText.textContent = `Loaded ${readings.length} readings from Data Connect.`;
-      } catch (error) {
-        console.warn("Using fallback demo data:", error);
-        readings = fallbackReadings;
-        statusText.textContent = "Could not reach backend. Showing demo readings.";
+    function startFirestoreSubscription() {
+      if (unsubscribeFromFirestore) {
+        unsubscribeFromFirestore();
       }
 
-      render();
+      statusText.textContent = "Connecting to Firestore...";
+
+      const readingsQuery = query(
+        collection(db, "sensorReadings"),
+        orderBy("timestamp", "desc"),
+        limit(100)
+      );
+
+      unsubscribeFromFirestore = onSnapshot(
+        readingsQuery,
+        (snapshot) => {
+          readings = snapshot.docs.map(normalizeSensorReading);
+          totalReadingCount = snapshot.size;
+          statusText.textContent = `Firestore live listener active. Loaded ${readings.length} readings.`;
+          render();
+        },
+        (error) => {
+          console.error("Firestore listener error:", error);
+          statusText.textContent = `Firestore error: ${error.message}`;
+        }
+      );
     }
 
     searchInput.addEventListener("input", render);
     typeFilter.addEventListener("change", render);
-    refreshButton.addEventListener("click", loadReadings);
+    refreshButton.addEventListener("click", startFirestoreSubscription);
+    localRandomButton.addEventListener("click", () => {
+      setLocalRandomGeneration(!localRandomEnabled);
+    });
 
-    loadReadings();
+    startFirestoreSubscription();
   </script>
 </body>
 </html>

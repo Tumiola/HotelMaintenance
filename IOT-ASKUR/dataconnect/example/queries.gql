@@ -6,3 +6,39 @@ query ListSensors @auth(level: NO_ACCESS){
     unit
   }
 }
+
+query ListSensorReadings @auth(level: PUBLIC) {
+  sensorReadings(orderBy: { timestamp: DESC }, limit: 100) {
+    id
+    value
+    unit
+    description
+    timestamp
+
+    sensor {
+      id
+      name
+      type
+      unit
+      serialNumber
+      locationDetails
+
+      sensorCollection {
+        id
+        name
+
+        room {
+          id
+          name
+          floor
+
+          building {
+            id
+            name
+            address
+          }
+        }
+      }
+    }
+  }
+}

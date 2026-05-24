@@ -4,3 +4,11 @@ generate:
     - outputDir: ../../functions/src/dataconnect-admin-generated
       package: "@dataconnect/admin-generated"
       packageJsonDir: ../..
+  javascriptSdk:
+    - outputDir: ../../Frontend/dataconnect-generated
+      package: "@dataconnect/generated"
+      packageJsonDir: ../..
+      clientCache:
+        maxAge: 5s
+        storage: memory
+    
