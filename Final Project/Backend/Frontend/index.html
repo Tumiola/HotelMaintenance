@@ -1,0 +1,613 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Lorca Sensor Dashboard</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    body {
+      background: #f4f7fb;
+      color: #172033;
+      min-height: 100vh;
+    }
+
+    header {
+      background: linear-gradient(135deg, #10233f, #1f6f8b);
+      color: white;
+      padding: 48px 24px;
+      text-align: center;
+    }
+
+    header h1 {
+      font-size: clamp(2rem, 5vw, 4rem);
+      margin-bottom: 12px;
+    }
+
+    header p {
+      max-width: 720px;
+      margin: 0 auto;
+      opacity: 0.9;
+      font-size: 1.05rem;
+      line-height: 1.6;
+    }
+
+    main {
+      max-width: 1150px;
+      margin: -32px auto 48px;
+      padding: 0 20px;
+    }
+
+    .panel {
+      background: white;
+      border-radius: 18px;
+      box-shadow: 0 14px 40px rgba(20, 38, 70, 0.12);
+      padding: 24px;
+      margin-bottom: 24px;
+    }
+
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .toolbar input,
+    .toolbar select,
+    .toolbar button {
+      border: 1px solid #d6deea;
+      border-radius: 10px;
+      padding: 10px 12px;
+      font-size: 0.95rem;
+    }
+
+    .toolbar input {
+      min-width: 240px;
+    }
+
+    .toolbar button {
+      background: #1f6f8b;
+      color: white;
+      cursor: pointer;
+      border: none;
+      font-weight: 600;
+    }
+
+    .toolbar button:hover {
+      background: #185b72;
+    }
+
+    .status {
+      margin-top: 14px;
+      font-size: 0.9rem;
+      color: #64748b;
+    }
+
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+
+    .card {
+      background: white;
+      border-radius: 16px;
+      padding: 20px;
+      box-shadow: 0 10px 30px rgba(20, 38, 70, 0.08);
+    }
+
+    .card small {
+      color: #64748b;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      font-weight: 700;
+    }
+
+    .card strong {
+      display: block;
+      font-size: 2rem;
+      margin-top: 8px;
+    }
+
+    .table-wrapper {
+      overflow-x: auto;
+    }
+
+    .chart-section {
+      display: none;
+    }
+
+    .chart-section.visible {
+      display: block;
+    }
+
+    .chart-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+
+    .chart-header h2 {
+      font-size: 1.25rem;
+    }
+
+    .chart-header p {
+      color: #64748b;
+      font-size: 0.9rem;
+    }
+
+    canvas {
+      width: 100%;
+      height: 320px;
+      border: 1px solid #e5ebf3;
+      border-radius: 14px;
+      background: #ffffff;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      min-width: 760px;
+    }
+
+    th,
+    td {
+      text-align: left;
+      padding: 14px 12px;
+      border-bottom: 1px solid #e5ebf3;
+    }
+
+    th {
+      background: #f8fafc;
+      color: #334155;
+      font-size: 0.85rem;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .badge {
+      display: inline-block;
+      padding: 4px 9px;
+      border-radius: 999px;
+      background: #e0f2fe;
+      color: #075985;
+      font-size: 0.8rem;
+      font-weight: 700;
+    }
+
+    .empty {
+      text-align: center;
+      padding: 32px;
+      color: #64748b;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Lorca Sensor Dashboard</h1>
+    <p>Live overview of room-node telemetry received through LoRa/LoRaWAN and stored in Firebase Firestore.</p>
+  </header>
+
+  <main>
+    <section class="panel">
+      <div class="toolbar">
+        <input id="searchInput" type="text" placeholder="Search room, device, or sensor type..." />
+
+        <select id="typeFilter">
+          <option value="all">All sensor types</option>
+          <option value="TEMPERATURE">Temperature</option>
+          <option value="HUMIDITY">Humidity</option>
+          <option value="HEARTRATE">Heart rate</option>
+          <option value="SLEEP_EVENT">Sleep event</option>
+        </select>
+
+        <button id="refreshButton">Reconnect</button>
+        <button id="localRandomButton">Start local random data</button>
+      </div>
+      <p id="status" class="status">Connecting to Firestore...</p>
+    </section>
+
+    <section class="cards">
+      <div class="card">
+        <small>Total readings</small>
+        <strong id="totalReadings">0</strong>
+      </div>
+      <div class="card">
+        <small>Active devices</small>
+        <strong id="activeDevices">0</strong>
+      </div>
+      <div class="card">
+        <small>Latest reading</small>
+        <strong id="latestReading">—</strong>
+      </div>
+    </section>
+
+    <section id="chartSection" class="panel chart-section">
+      <div class="chart-header">
+        <div>
+          <h2 id="chartTitle">Historical data</h2>
+          <p id="chartSubtitle">Select a specific sensor type to show its history.</p>
+        </div>
+      </div>
+      <canvas id="historyChart" width="1000" height="320"></canvas>
+    </section>
+
+    <section class="panel table-wrapper">
+      <table>
+        <thead>
+          <tr>
+            <th>Time</th>
+            <th>Building</th>
+            <th>Room</th>
+            <th>Device</th>
+            <th>Sensor</th>
+            <th>Value</th>
+            <th>Unit</th>
+          </tr>
+        </thead>
+        <tbody id="sensorTableBody">
+          <tr>
+            <td colspan="7" class="empty">No readings loaded.</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+  </main>
+
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/12.0.0/firebase-app.js";
+    import {
+      getFirestore,
+      collection,
+      query,
+      orderBy,
+      limit,
+      onSnapshot
+    } from "https://www.gstatic.com/firebasejs/12.0.0/firebase-firestore.js";
+
+    const firebaseConfig = {
+      apiKey: "AIzaSyCBBJ5jBVtSOCH-K1dya_lJwi_vWxR_UmA",
+      authDomain: "iot-sleeping.firebaseapp.com",
+      projectId: "iot-sleeping",
+      storageBucket: "iot-sleeping.firebasestorage.app",
+      messagingSenderId: "884808606708",
+      appId: "1:884808606708:web:78b386572ba1f1fd808fa1",
+      measurementId: "G-HJNE1PY9X7"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const db = getFirestore(app);
+
+    let unsubscribeFromFirestore = null;
+    let readings = [];
+    let totalReadingCount = 0;
+    let localRandomEnabled = false;
+    let localRandomIntervalId = null;
+
+    const tableBody = document.getElementById("sensorTableBody");
+    const searchInput = document.getElementById("searchInput");
+    const typeFilter = document.getElementById("typeFilter");
+    const refreshButton = document.getElementById("refreshButton");
+    const localRandomButton = document.getElementById("localRandomButton");
+    const statusText = document.getElementById("status");
+
+    const totalReadings = document.getElementById("totalReadings");
+    const activeDevices = document.getElementById("activeDevices");
+    const latestReading = document.getElementById("latestReading");
+    const chartSection = document.getElementById("chartSection");
+    const chartTitle = document.getElementById("chartTitle");
+    const chartSubtitle = document.getElementById("chartSubtitle");
+    const historyChart = document.getElementById("historyChart");
+    const chartContext = historyChart.getContext("2d");
+
+    function formatTime(timestamp) {
+      if (!timestamp) return "—";
+
+      if (typeof timestamp.toDate === "function") {
+        return timestamp.toDate().toLocaleString(undefined, {
+          dateStyle: "short",
+          timeStyle: "medium"
+        });
+      }
+
+      return new Date(timestamp).toLocaleString(undefined, {
+        dateStyle: "short",
+        timeStyle: "medium"
+      });
+    }
+
+    function timestampToMillis(timestamp) {
+      if (!timestamp) return 0;
+      if (typeof timestamp.toMillis === "function") return timestamp.toMillis();
+      return new Date(timestamp).getTime();
+    }
+
+    function normalizeSensorReading(docSnapshot) {
+      const data = docSnapshot.data();
+
+      return {
+        id: docSnapshot.id,
+        timestamp: data.timestamp,
+        buildingId: data.buildingId,
+        buildingName: data.buildingName ?? "Unknown building",
+        roomId: data.roomId,
+        roomName: data.roomName ?? "Unknown room",
+        sensorCollectionId: data.sensorCollectionId,
+        sensorId: data.sensorId,
+        sensorName: data.sensorName ?? "Unknown sensor",
+        deviceId: data.deviceId ?? "unknown-device",
+        sensorType: data.sensorType ?? "UNKNOWN",
+        value: Number(data.value),
+        unit: data.unit ?? ""
+      };
+    }
+
+    function getFilteredReadings() {
+      const queryText = searchInput.value.trim().toLowerCase();
+      const selectedType = typeFilter.value;
+
+      return readings.filter((reading) => {
+        const matchesType = selectedType === "all" || reading.sensorType === selectedType;
+        const searchable = `${reading.buildingName} ${reading.roomName} ${reading.deviceId} ${reading.sensorType} ${reading.sensorName}`.toLowerCase();
+        const matchesSearch = searchable.includes(queryText);
+        return matchesType && matchesSearch;
+      });
+    }
+
+    function drawHistoryChart(filtered) {
+      const selectedType = typeFilter.value;
+
+      if (selectedType === "all") {
+        chartSection.classList.remove("visible");
+        return;
+      }
+
+      const points = filtered
+        .filter((reading) => typeof reading.value === "number" && !Number.isNaN(reading.value))
+        .sort((a, b) => timestampToMillis(a.timestamp) - timestampToMillis(b.timestamp));
+
+      chartSection.classList.add("visible");
+      chartTitle.textContent = `${selectedType} history`;
+
+      chartContext.clearRect(0, 0, historyChart.width, historyChart.height);
+
+      if (points.length < 2) {
+        chartSubtitle.textContent = "Not enough readings to draw a historical graph.";
+        chartContext.fillStyle = "#64748b";
+        chartContext.font = "16px system-ui";
+        chartContext.fillText("Need at least two readings for this sensor type.", 32, 160);
+        return;
+      }
+
+      const values = points.map((point) => point.value);
+      const minValue = Math.min(...values);
+      const maxValue = Math.max(...values);
+      const range = maxValue - minValue || 1;
+
+      const paddingLeft = 64;
+      const paddingRight = 24;
+      const paddingTop = 28;
+      const paddingBottom = 46;
+      const plotWidth = historyChart.width - paddingLeft - paddingRight;
+      const plotHeight = historyChart.height - paddingTop - paddingBottom;
+
+      chartSubtitle.textContent = `${points.length} readings · ${minValue} to ${maxValue} ${points[0].unit ?? ""}`;
+
+      function xForIndex(index) {
+        return paddingLeft + (index / (points.length - 1)) * plotWidth;
+      }
+
+      function yForValue(value) {
+        return paddingTop + ((maxValue - value) / range) * plotHeight;
+      }
+
+      chartContext.strokeStyle = "#e5ebf3";
+      chartContext.lineWidth = 1;
+      chartContext.beginPath();
+      chartContext.moveTo(paddingLeft, paddingTop);
+      chartContext.lineTo(paddingLeft, paddingTop + plotHeight);
+      chartContext.lineTo(paddingLeft + plotWidth, paddingTop + plotHeight);
+      chartContext.stroke();
+
+      chartContext.fillStyle = "#64748b";
+      chartContext.font = "13px system-ui";
+      chartContext.fillText(`${maxValue} ${points[0].unit ?? ""}`, 8, paddingTop + 5);
+      chartContext.fillText(`${minValue} ${points[0].unit ?? ""}`, 8, paddingTop + plotHeight + 5);
+      chartContext.fillText(formatTime(points[0].timestamp), paddingLeft, historyChart.height - 14);
+      chartContext.fillText(formatTime(points[points.length - 1].timestamp), paddingLeft + plotWidth - 150, historyChart.height - 14);
+
+      chartContext.strokeStyle = "#1f6f8b";
+      chartContext.lineWidth = 3;
+      chartContext.beginPath();
+
+      points.forEach((point, index) => {
+        const x = xForIndex(index);
+        const y = yForValue(point.value);
+        if (index === 0) chartContext.moveTo(x, y);
+        else chartContext.lineTo(x, y);
+      });
+
+      chartContext.stroke();
+
+      chartContext.fillStyle = "#1f6f8b";
+      points.forEach((point, index) => {
+        chartContext.beginPath();
+        chartContext.arc(xForIndex(index), yForValue(point.value), 4, 0, Math.PI * 2);
+        chartContext.fill();
+      });
+    }
+
+    function generateLocalRandomReading() {
+      const sensorTemplates = [
+        {
+          sensorId: "sensor-temp-room-101",
+          sensorName: "Room 101 Temperature",
+          sensorType: "TEMPERATURE",
+          unit: "°C",
+          min: 20,
+          max: 26,
+          decimals: 2
+        },
+        {
+          sensorId: "sensor-humidity-room-101",
+          sensorName: "Room 101 Humidity",
+          sensorType: "HUMIDITY",
+          unit: "%",
+          min: 30,
+          max: 55,
+          decimals: 1
+        },
+        {
+          sensorId: "sensor-heartrate-room-101",
+          sensorName: "Room 101 Heart Rate",
+          sensorType: "HEARTRATE",
+          unit: "bpm",
+          min: 58,
+          max: 95,
+          decimals: 0
+        },
+        {
+          sensorId: "sensor-sleep-event-room-101",
+          sensorName: "Room 101 Sleep Events",
+          sensorType: "SLEEP_EVENT",
+          unit: "event",
+          min: 0,
+          max: 3,
+          decimals: 0
+        }
+      ];
+
+      const sensor = sensorTemplates[Math.floor(Math.random() * sensorTemplates.length)];
+      const rawValue = Math.random() * (sensor.max - sensor.min) + sensor.min;
+      const value = sensor.decimals === 0 ? Math.round(rawValue) : Number(rawValue.toFixed(sensor.decimals));
+
+      return {
+        id: `local-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        timestamp: new Date().toISOString(),
+        buildingId: "building-demo-01",
+        buildingName: "Demo Medical Hotel",
+        roomId: "room-101",
+        roomName: "Room 101",
+        sensorCollectionId: "room-101-node",
+        sensorId: sensor.sensorId,
+        sensorName: sensor.sensorName,
+        deviceId: "local-node-01",
+        sensorType: sensor.sensorType,
+        value,
+        unit: sensor.unit,
+        isLocalRandom: true
+      };
+    }
+
+    function addLocalRandomReading() {
+      readings.unshift(generateLocalRandomReading());
+      totalReadingCount += 1;
+
+      if (readings.length > 100) {
+        readings = readings.slice(0, 100);
+      }
+
+      render();
+    }
+
+    function setLocalRandomGeneration(enabled) {
+      localRandomEnabled = enabled;
+
+      if (localRandomIntervalId) {
+        clearInterval(localRandomIntervalId);
+        localRandomIntervalId = null;
+      }
+
+      if (localRandomEnabled) {
+        addLocalRandomReading();
+        localRandomIntervalId = setInterval(addLocalRandomReading, 3000);
+        localRandomButton.textContent = "Stop local random data";
+        statusText.textContent = "Local random data enabled. These readings are not written to Firestore.";
+      } else {
+        localRandomButton.textContent = "Start local random data";
+        statusText.textContent = "Local random data stopped. Firestore listener still active.";
+      }
+    }
+
+    function render() {
+      const filtered = getFilteredReadings();
+
+      totalReadings.textContent = totalReadingCount;
+      activeDevices.textContent = new Set(readings.map((reading) => reading.deviceId)).size;
+
+      const latest = [...readings].sort((a, b) => timestampToMillis(b.timestamp) - timestampToMillis(a.timestamp))[0];
+      latestReading.textContent = latest ? `${latest.value} ${latest.unit}` : "—";
+
+      drawHistoryChart(filtered);
+
+      if (filtered.length === 0) {
+        tableBody.innerHTML = `<tr><td colspan="7" class="empty">No matching readings.</td></tr>`;
+        return;
+      }
+
+      tableBody.innerHTML = filtered
+        .sort((a, b) => timestampToMillis(b.timestamp) - timestampToMillis(a.timestamp))
+        .map((reading) => `
+          <tr>
+            <td>${formatTime(reading.timestamp)}</td>
+            <td>${reading.buildingName ?? "—"}</td>
+            <td>${reading.roomName ?? "—"}</td>
+            <td>${reading.deviceId ?? "—"}</td>
+            <td><span class="badge">${reading.sensorType}</span></td>
+            <td>${reading.value}</td>
+            <td>${reading.unit ?? ""}</td>
+          </tr>
+        `)
+        .join("");
+    }
+
+    function startFirestoreSubscription() {
+      if (unsubscribeFromFirestore) {
+        unsubscribeFromFirestore();
+      }
+
+      statusText.textContent = "Connecting to Firestore...";
+
+      const readingsQuery = query(
+        collection(db, "sensorReadings"),
+        orderBy("timestamp", "desc"),
+        limit(100)
+      );
+
+      unsubscribeFromFirestore = onSnapshot(
+        readingsQuery,
+        (snapshot) => {
+          readings = snapshot.docs.map(normalizeSensorReading);
+          totalReadingCount = snapshot.size;
+          statusText.textContent = `Firestore live listener active. Loaded ${readings.length} readings.`;
+          render();
+        },
+        (error) => {
+          console.error("Firestore listener error:", error);
+          statusText.textContent = `Firestore error: ${error.message}`;
+        }
+      );
+    }
+
+    searchInput.addEventListener("input", render);
+    typeFilter.addEventListener("change", render);
+    refreshButton.addEventListener("click", startFirestoreSubscription);
+    localRandomButton.addEventListener("click", () => {
+      setLocalRandomGeneration(!localRandomEnabled);
+    });
+
+    startFirestoreSubscription();
+  </script>
+</body>
+</html>
